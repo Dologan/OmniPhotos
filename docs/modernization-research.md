@@ -1,12 +1,18 @@
 # Capture, reconstruction and headset validation
 
-This research review draws on the work of the requested GPT-6.2 Astra subagent. The citations identify the publications used for the design comparison. The cloud network blocked direct access to the paper and publisher pages during this task. The main workspace cross-checked the RAFT, SEA-RAFT, Depth Anything V2 and Gaussian Splatting references against their official project repositories. The proposed methods still require a paired evaluation on OmniPhotos datasets.
+This research review draws on the work of the requested GPT-6.2 Astra subagent. The citations identify the publications used for the design comparison. After network access was expanded, the main workspace read the original OmniPhotos paper and checked the SEA-RAFT and Gaussian Splatting project pages. The RAFT, SEA-RAFT, Depth Anything V2 and Gaussian Splatting references were also cross-checked against their official repositories. The proposed methods still require a paired evaluation on OmniPhotos datasets.
 
 ## Preserve the OmniPhotos baseline
 
 OmniPhotos uses panoramas captured along an approximately circular camera trajectory. Proxy geometry and optical flow between neighboring frames help interpolate viewpoints and create translational parallax. A panorama taken while rotating about a stationary optical center provides little baseline for estimating depth. A circular trajectory also leaves some surfaces hidden, especially when the viewer moves away from the ring. Keep the same input frames, poses, proxy and renderer when comparing a new flow estimator. [OmniPhotos, Bertel et al., SIGGRAPH Asia 2020](https://doi.org/10.1145/3417770)
 
 For the Insta360 ONE RS 1-Inch 360 Edition, retain the original dual-lens media and export a stitched **2:1 equirectangular** master from Insta360 Studio. Record export settings, timing and stabilization choices. Use consistent exposure and white balance where feasible. Walk a slow loop at roughly constant height. Check that a heading or stabilization change can be accounted for when registering camera poses. Inspect close railings, moving subjects and objects crossing the stitch. A stitched panorama approximates a central camera, and the dual-lens separation can leave near-field stitching errors even when scene depth is correct. Preserve the full-resolution export for comparisons. [Insta360 ONE RS 1-Inch 360 Edition](https://www.insta360.com/product/insta360-oners/1inch-360)
+
+## What changed after the review
+
+The import path checks for 2:1 panoramas and preserves source-frame indices through extraction and projection. The new profile estimates poses from one perspective crop per panorama and checks connected-model coverage before cache generation. DIS remains the flow baseline. The setup guide recommends a seated Quest Link check and records the paired tests required before adopting a new flow estimator, geometry prior or representation.
+
+Sections 3.2 and 6 of the paper clarify two boundaries for those comparisons. The authors used DIS and FlowNet2 and evaluated a scene-adaptive proxy fitted to a sparse reconstruction. The validated modernization profile uses PyCOLMAP and DIS with the optional adaptive proxy fitting disabled. Compare against a separate adaptive-proxy run when aiming to reproduce the paper's visual results. Section 6.1 describes the original experience as 5-DoF: arbitrary head rotation and translation in the capture plane. Validate horizontal translation within the capture ring and score vertical motion separately as a limitation. [OmniPhotos paper, sections 3.2, 4, and 6](https://richardt.name/publications/omniphotos/OmniPhotos-BertelEtAl-SIGAsia2020-paper.pdf)
 
 ## Test candidate methods independently
 
