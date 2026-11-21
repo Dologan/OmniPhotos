@@ -77,7 +77,7 @@ void Logger::init_glog_runtime_env(const std::string& logger_name, const Logger_
 	// change the destination file of google::GLOG_INFO, set output log to file prefix
 	// the log level larger than the specified threshold level (the first parameter) output  to the log file
 	// google::GLOG_ERROR > google::GLOG_WARNING > google::GLOG_INFO
-	google::SetLogDestination(FLAGS_stderrthreshold, log_file_name.c_str());
+	google::SetLogDestination(static_cast<google::LogSeverity>(FLAGS_stderrthreshold), log_file_name.c_str());
 
 	// sets the maximum number of seconds which logs may be buffered for.
 	FLAGS_logbufsecs = 0;
@@ -95,7 +95,7 @@ void Logger::init_glog_runtime_env(const std::string& logger_name, const Logger_
 	google::InstallFailureSignalHandler();
 
 	// output SIGSEGV to file
-	google::InstallFailureWriter([](const char* data, int size)
+	google::InstallFailureWriter([](const char* data, std::size_t size)
 	{
 		std::ofstream fs("failure_stack_dump.log", std::ios::app);
 		std::string str = std::string(data, size);

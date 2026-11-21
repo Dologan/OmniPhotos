@@ -12,7 +12,6 @@ The module use to define the class OpPreprocessor.
 
 import os
 import copy
-import sys
 import pathlib
 import hashlib
 import shutil
@@ -20,7 +19,6 @@ import re
 import csv
 import subprocess
 import concurrent.futures
-import multiprocessing
 import json
 
 import yaml
@@ -29,9 +27,6 @@ import msgpack
 import numpy as np
 from PIL import Image
 from skimage import transform, io
-
-from flownet2.utils.flow_utils import writeFlow, readFlow
-from flownet2.utils import computeColor
 
 from abs_preprocessor import AbsPreprocessor
 import circleselector
@@ -59,112 +54,56 @@ class OpPreprocessor(AbsPreprocessor):
 
         # the path & parameters of OmniPhotos executable file
         self.omniphotos_path = os.path.join(os.path.dirname(__file__) , self.config["preprocessing.omniphotos.execution_file_path"])
-        self.op_frame_number = self.config["preprocessing.frame_fixed_number"]
-        if self.op_frame_number == -1:
-            self.op_frame_number = len(self.op_image_list)
         self.circle_radius = self.config["preprocessing.omniphotos.circle_radius"]
         if self.circle_radius is None or self.circle_radius <= 0:
             self.show_info("The circle radius {} are wrong.".format(self.circle_radius),"error")
 
         self.op_exe_config_file = self.config["preprocessing.omniphotos.yaml_config_path"]
 
-        # get the resolution of input images
         self.op_input_downsample_scalar = self.config["preprocessing.omniphotos.downsample_scalar"]
-        # optical flow down sample scalar
+        scale_x, scale_y = self.op_input_downsample_scalar
+        if (scale_x, scale_y) == (-1.0, -1.0):
+            scale_x = scale_y = 1.0
+        if scale_x != scale_y or not 0 < scale_x <= 1:
+            raise ValueError("Input downsampling requires an equal scale in (0, 1] or [-1, -1].")
+        self.op_input_frame_height = max(1, int(self.frame_height * scale_y))
+        self.op_input_frame_width = max(1, int(self.frame_width * scale_x))
+        if self.image_type == "panoramic":
+            self.op_input_frame_width = 2 * self.op_input_frame_height
+        self.show_info(f"Working images: {self.op_input_frame_width}x{self.op_input_frame_height}.")
+
         self.of_downsample_scalar = self.config["preprocessing.of.downsample_scalar"]
-        self.op_input_frame_width = -1
-        self.op_input_frame_height = -1
-        self.comput_downsample_scalar()
+        if self.of_downsample_scalar not in ([-1.0, -1.0], [1.0, 1.0], [0.5, 0.5]):
+            raise ValueError("Optical flow supports full or half resolution.")
 
-        # optical flow configuration
-        self.opticalflow_method = self.config["preprocessing.of.method"]
-        self.save_visualization = self.config["preprocessing.of.save_visualization"]
-
-        # the folder as convention
         self.cache_dir = self.root_dir / "Cache"
         self.dir_make(self.cache_dir)
-        self.cache_backup_dir = self.temp_dir / "Cache_backup"
         self.capture_data_dir = self.root_dir / "Capture"
-        self.capture_data_backup_dir = self.temp_dir / "Capture_backup"
-
-        # cache folder naming convention
-        # viewNumber-[full/half/quarter]Res-[nostab/stab]-[DIS/flownet2]
+        self.cache_folder_name = self.config.get("preprocessing.cache_folder_name")
         self.cache_folder_path_flownet2 = None
         self.op_preprocessing_cache_dir = None
         self.circle_selector_start_idx = 0
         self.circle_selector_end_idx = -1
 
-
-    def comput_downsample_scalar(self):
-        """
-        """
-        # get the resolution of input images
-        if self.op_input_downsample_scalar == [-1.0, -1.0] or self.op_input_downsample_scalar == [1.0, 1.0]:
-            self.op_input_frame_height = self.frame_height
-            self.op_input_frame_width = self.frame_width
-        elif self.op_input_downsample_scalar[0] == self.op_input_downsample_scalar[1] and\
-            0.0 < self.op_input_downsample_scalar[0] < 1.0 and 0.0 < self.op_input_downsample_scalar[1] < 1.0 :
-            self.op_input_frame_height = int(self.frame_height * self.op_input_downsample_scalar[0])
-            self.op_input_frame_width = int(self.frame_width * self.op_input_downsample_scalar[1])
-        else:
-            self.show_info("Input images downsample scalar {} is wrong.".format(self.op_input_downsample_scalar), "error")
-        self.show_info("Input images resolution is {} x {}.".format(self.op_input_frame_height, self.op_input_frame_width))
-
-        # optical flow down sample scalar
-        if self.of_downsample_scalar == [-1.0, -1.0] or \
-            (self.of_downsample_scalar[0] == self.of_downsample_scalar[1] and 
-                0.0 < self.of_downsample_scalar[0] <= 1.0 and \
-                0.0 < self.of_downsample_scalar[1] <= 1.0) :
-            self.show_info("Input images downsample scalar {} is wrong.".format(self.of_downsample_scalar))
-        else:
-            self.show_info("Input images downsample scalar {} is wrong.".format(self.of_downsample_scalar), "error")
-        # check the scalar for OmniPhotos
-        if self.of_downsample_scalar != [-1.0, -1.0] \
-                and self.of_downsample_scalar != [1.0, 1.0] \
-                and self.of_downsample_scalar != [0.5, 0.5]:
-            self.show_info("The OmniPhotos preprocessing program only generate half resultion downsampled optical flow.", "error")
-
     def generating_cache_filename(self):
-        """
-        generate the file name of cache directory.
-        The name compose with "ImagesNumber-InputImageResolution-OpticalFlowResolution-FlowMethod".
-        """
-        if self.cache_folder_name is None:
-            self.show_info("Cache folder name is not set, generating the cache file name based on the image resolution.")
-        else:
-            self.cache_folder_path_flownet2 = cache_folder_prefix + "-flownet2"
-            self.op_preprocessing_cache_dir = cache_folder_prefix + "-DIS"
-            self.show_info("cache folder name with pre-setting prefix: {}".format(self.cache_folder_name))
-            return
-
-        resolution_abbr_dict = {"5760x2880":"5_7K","3840x1920":"4k", \
-                                "3008x1504":"3k", "2880x1440":"2_9K", \
-                                "1920x960":"2k", "1504x752":"1_5k", \
-                                "960x480":"1k", "480x240":"0_5k"}
-        dir_name_express= "ImagesNumber-InputImageResolution-OpticalFlowResolution-FlowMethod"
-
-        # get input image resolution abbreviation
-        input_image_resolution_str = str(int(self.op_input_frame_width)) + "x" + str(int(self.op_input_frame_height))
-        try:
-            input_image_res_abbr = resolution_abbr_dict[input_image_resolution_str]
-        except KeyError as err:
-            self.show_info("Input image resolution abbreviation error: {}.".format(input_image_resolution_str,err),"error")
-
-        # get the optical flow resolution abbreviation
-        of_frame_height = self.op_input_frame_height * abs(self.of_downsample_scalar[0])
-        of_frame_width = self.op_input_frame_width * abs(self.of_downsample_scalar[1])
-        of_resolution_str = str(int(of_frame_width)) + "x" + str(int(of_frame_height))
-        try:
-            of_res_abbr = resolution_abbr_dict[of_resolution_str]
-        except KeyError as err:
-            self.show_info("Optical flow resolution abbreviation error: {}.".format(of_resolution_str, err),"error")
-
-        # generate the cache directory name
-        # generate the filename for MP cache directory
-        frame_number = str(self.image_end_idx - self.image_start_idx)
-        self.op_preprocessing_cache_dir = frame_number + "-" + input_image_res_abbr + "-" + of_res_abbr + "-DIS"
-        # generate the filename for flownet2 cache directory
-        self.cache_folder_path_flownet2 = frame_number + "-" + input_image_res_abbr + "-" + of_res_abbr + "-flownet2"
+        """Preserve historical names for known resolutions and support new camera sizes."""
+        prefix = self.cache_folder_name
+        if prefix is None:
+            known = {
+                (5760, 2880): "5_7K", (3840, 1920): "4k", (3008, 1504): "3k",
+                (2880, 1440): "2_9K", (1920, 960): "2k", (1504, 752): "1_5k",
+                (960, 480): "1k", (480, 240): "0_5k",
+            }
+            width, height = self.op_input_frame_width, self.op_input_frame_height
+            flow_scale = abs(self.of_downsample_scalar[0])
+            flow_width, flow_height = int(width * flow_scale), int(height * flow_scale)
+            images = known.get((width, height), f"{width}x{height}")
+            flow = known.get((flow_width, flow_height), f"{flow_width}x{flow_height}")
+            prefix = f"{len(self.op_image_list)}-{images}-{flow}"
+        if pathlib.Path(prefix).name != prefix or prefix in {"", ".", ".."}:
+            raise ValueError("Cache folder prefix must be a single directory name.")
+        self.op_preprocessing_cache_dir = f"{prefix}-DIS"
+        self.cache_folder_path_flownet2 = f"{prefix}-flownet2"
 
 
     def generating_config_files(self):
@@ -175,20 +114,18 @@ class OpPreprocessor(AbsPreprocessor):
         # 1) select the best circle
         # do this here so we copy only the images we need to the Input image directory.
         if self.find_stable_circle:
+            if self.trajectory_tool == "colmap":
+                raise ValueError("Automatic circle selection requires OpenVSLAM. Trim the COLMAP input to one loop.")
             self.openvslam_select_stable_circle()
         self.generating_cache_filename()
 
         # create folder for downsampled input images
         self.dir_make(self.op_images_dir)
 
-        expected_length = len(self.op_image_list)
-        actual_length = len(os.listdir(self.op_images_dir))
-
-        # 2) move the image from trajectory directory to the Input directory
-        #  downsample the input image with the setting \
-        # "preprocessing.omniphotos.downsample_scalar"
-        if expected_length!=actual_length:
-            self.show_info("Generating the input images for OmniPhotos in directory {}.".format(self.op_images_dir))
+        expected_images = set(self.op_image_list)
+        existing_images = {path.name for path in self.op_images_dir.iterdir() if path.is_file()}
+        if not expected_images.issubset(existing_images):
+            self.show_info(f"Generating working images in {self.op_images_dir}.")
             self.omniphotos_generate_input_images()
 
         # 3) convert and generate the trajectory files as OmniPhotos request format
@@ -226,49 +163,30 @@ class OpPreprocessor(AbsPreprocessor):
             else:
                 self.show_info("The OpenVSLAM essential file already exists. Skipping OpenVSLAM file conversion.")
 
-        # check the colmap necessary file complete
-        if self.trajectory_tool == "colmap" or self.trajectory_tool == "all":
-            file_complete = False
-            for term in self.colmap_essential_file_list:
-                file_complete = file_complete or not (self.output_directory_path_colmap / term).exists()
-
-            if file_complete:
-                self.show_info("The OpenVSLAM essential files are missing.", "error")
-
-        # 4) make the directory & file structure as the OmniPhotos request
-        self.show_info("Backing up and copying the trajectory reconstruction files.")
-        need_file_structure_trim = False
-        if self.trajectory_tool == "colmap" or self.trajectory_tool == "all":
-            if len(os.listdir(str(self.output_directory_path_colmap))) > len(self.colmap_essential_file_list):
-                need_file_structure_trim = need_file_structure_trim or True
-            elif len(os.listdir(str(self.output_directory_path_colmap))) < len(self.colmap_essential_file_list):
-                self.show_info("The COLMAP essential files are not complete", "error")
-        if self.trajectory_tool == "openvslam" or self.trajectory_tool == "all":
-            if len(os.listdir(str(self.output_directory_path_ovslam))) > len(self.openvslam_essential_file_list):
-                need_file_structure_trim = need_file_structure_trim or True
-            elif len(os.listdir(str(self.output_directory_path_ovslam))) < len(self.openvslam_essential_file_list):
-                self.show_info("The OpenVSLAM essential files are not complete.", "error")
-        if need_file_structure_trim:
-            self.show_info("Trimming the trajectory file structure.")
-            self.file_structure_trim()
+        if self.trajectory_tool in {"colmap", "all"}:
+            for filename in self.colmap_essential_file_list:
+                source = self.output_directory_path_colmap / "full-model-ba-txt" / filename
+                destination = self.output_directory_path_colmap / filename
+                if not destination.is_file():
+                    if not source.is_file():
+                        raise FileNotFoundError(f"Missing COLMAP reconstruction file: {source}")
+                    shutil.copyfile(source, destination)
 
         # 5) generate the config file and images for OmniPhotos
         self.show_info("Generating the config files for OmniPhotos viewer & preprocessing.", "info")
         self.omniphotos_generate_viewer_config()
 
-        # 6) run the OmniPhotos pre-processing, generate *.flo, *.json and *.conf in Cache folder
-        if not os.path.exists(str(self.cache_dir / self.op_preprocessing_cache_dir)):
-            # if Cache folder is empty, run OmniPhotos preprocessor
-            self.show_info("Running the Omniphotos Pre-processing.")
+        cache = self.cache_dir / self.op_preprocessing_cache_dir
+        if not cache.exists():
+            self.show_info("Running native OmniPhotos preprocessing.")
             self.omniphotos_preprocess()
-        else:
-            # if the result exist skip
-            self.show_info(
-                "The {} folder is not empty, skipping the OmniPhotos preprocessing step.".format(str(self.cache_dir)))
+        if not (cache / "Cameras.csv").is_file() or not any(cache.glob("PreprocessingSetup-*.json")):
+            raise RuntimeError(f"Cache {cache} is incomplete. Use a new cache folder name or move it before retrying.")
 
         # 7) initial flownet2 run-time environment
-        self.show_info("Initial the Flownet2 run-time environment.")
-        self.omniphotos_flownet2_init()
+        if self.config["preprocessing.step_end"] in {-1, 4}:
+            self.show_info("Preparing the optional FlowNet2 cache.")
+            self.omniphotos_flownet2_init()
 
     def openvslam_select_stable_circle(self):
 
@@ -329,46 +247,24 @@ class OpPreprocessor(AbsPreprocessor):
             self.omniphotos_downsample_input_images()
 
     def omniphotos_downsample_input_images(self):
-        """
-        downsample the input images as the configuration of \
-        preprocessing.OmniPhotos.downsample_scalar in yaml file.
-        And replace the original full resolution images (Input folder), backup the
-        original folder "Input" as "Input_backup".
-        """
-        #with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
-            def downsample_images(input_image_folder_path, output_info):
-                input_image_list = output_info[0]
-                output_image_list = output_info[1]
-                frame_idx = output_info[2]
-                image_data_downsample_size = output_info[3]
-                output_image_folder_path = output_info[4]
+        """Downsample only the source frames selected for the output dataset."""
+        output_shape = (self.op_input_frame_height, self.op_input_frame_width, 3)
 
-                input_image_term = input_image_list[frame_idx]
-                output_image_term = output_image_list[frame_idx]
-                image_data = io.imread(
-                    str(input_image_folder_path / input_image_term))
-                image_data = transform.resize(
-                    image_data, image_data_downsample_size, preserve_range=True)
+        def downsample(filename):
+            pixels = io.imread(self.traj_input_images_dir / filename)
+            pixels = transform.resize(pixels, output_shape, preserve_range=True, anti_aliasing=True)
+            pixels = np.clip(np.rint(pixels), 0, 255).astype(np.uint8)
+            path = self.op_images_dir / filename
+            image = Image.fromarray(pixels)
+            if path.suffix.lower() in {".jpg", ".jpeg"}:
+                image.save(path, quality=95)
+            else:
+                image.save(path)
 
-                if frame_idx % self.show_infor_interval == 0:
-                    self.show_info("Save image {} to {}.".format(
-                        input_image_term, str(output_image_folder_path)))
-                    self.show_image(image_data)
-
-                if os.path.splitext(output_image_term) in ['jpg', 'jpeg']:
-                    io.imsave(str(output_image_folder_path /
-                                  output_image_term), image_data, quality=95)
-                else:
-                    io.imsave(str(output_image_folder_path /
-                                  output_image_term), image_data)
-
-            return_results = {executor.submit(downsample_images, self.traj_input_images_dir,
-                                              [self.trajectory_images_list, self.op_image_list, frame_list_idx,
-                                               (self.op_input_frame_height, self.op_input_frame_width, 3), self.op_images_dir]): frame_list_idx for frame_list_idx in range(0, len(self.trajectory_images_list))}
-            for future in concurrent.futures.as_completed(return_results):
-                if not future.done():
-                    self.show_info("Image downsampling error.", "error")
+        # Bound the number of simultaneously decoded source panoramas and float work buffers.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1)) as executor:
+            for _ in executor.map(downsample, self.op_image_list):
+                pass
 
     def omniphotos_logging(self):
         """
@@ -419,7 +315,7 @@ class OpPreprocessor(AbsPreprocessor):
             parameters = {
                 r'\$circle_radius\$': str(self.circle_radius),
                 r'\$dataset_name\$': self.dataset_name,
-                r'\$cameras_number\$': str(self.image_end_idx - self.image_start_idx),
+                r'\$cameras_number\$': str(len(self.op_image_list)),
                 r'\$cache_folder_dis\$': self.op_preprocessing_cache_dir,
                 r'\$cache_folder_flownet2\$': self.cache_folder_path_flownet2,
                 r'\$sfm_file_name\$': modelfiles,
@@ -429,10 +325,11 @@ class OpPreprocessor(AbsPreprocessor):
                 r'\$image_width\$': str(self.op_input_frame_width),
                 r'\$image_height\$': str(self.op_input_frame_height),
                 r'\$first_frame\$': str(0),
-                r'\$last_frame\$': str(self.image_end_idx - self.image_start_idx),
+                r'\$last_frame\$': str(len(self.op_image_list) - 1),
                 r'\$image_fps\$': str(self.frame_fps),
                 r'\$change_basis\$': str(0),
-                r'\$intrinsic_scale\$': str(1.0),
+                r'\$equirectangular\$': str(int(self.image_type == 'panoramic')),
+                r'\$intrinsic_scale\$': str(self.op_input_frame_width / self.frame_width if self.image_type == 'perspective' else 1.0),
                 r'\$downsample_flow\$': str(0) if self.of_downsample_scalar[0] == -1 or self.of_downsample_scalar[0] == 1 else str(1),
                 r'\$compute_optical_flow\$': str(1),
                 r'\$use_point_cloud\$': str(1),
@@ -446,12 +343,7 @@ class OpPreprocessor(AbsPreprocessor):
         if not os.path.exists(self.omniphotos_path):
             self.show_info("OmniPhotos Preprocessing binary {} not found.".format(self.omniphotos_path), "error")
 
-        try:
-            output = subprocess.run(
-                [self.omniphotos_path, "-f", self.op_exe_config_file], check=True)
-            output.check_returncode()
-        except subprocess.CalledProcessError:
-            self.show_info("Starting up the OmniPhotos binary failed. {}".format(self.omniphotos_path))
+        subprocess.run([self.omniphotos_path, "-f", self.op_exe_config_file], check=True)
 
         # 3) output log to cache file
         log_str = self.omniphotos_logging()
@@ -473,16 +365,17 @@ class OpPreprocessor(AbsPreprocessor):
             r'\$image_width\$': str(self.op_input_frame_width),
             r'\$image_height\$': str(self.op_input_frame_height),
             r'\$first_frame\$': str(0),
-            r'\$last_frame\$': str(self.image_end_idx-self.image_start_idx),
+            r'\$last_frame\$': str(len(self.op_image_list) - 1),
             r'\$image_fps\$': str(self.frame_fps),
-            r'\$cameras_number\$': str(self.image_end_idx-self.image_start_idx),
+            r'\$cameras_number\$': str(len(self.op_image_list)),
             r'\$image_filename\$': self.original_filename_expression,
             r'\$cache_folder_dis\$': self.op_preprocessing_cache_dir,
             r'\$cache_folder_flownet2\$': self.cache_folder_path_flownet2,
             r'\$load_3d_points\$': str(1),
             r'\$load_sparse_point_cloud\$': str(1),
             r'\$change_basis\$': str(0),
-            r'\$intrinsic_scale\$': str(1.0),
+            r'\$equirectangular\$': str(int(self.image_type == 'panoramic')),
+                r'\$intrinsic_scale\$': str(self.op_input_frame_width / self.frame_width if self.image_type == 'perspective' else 1.0),
             r'\$downsample_flow\$': str(0) if self.of_downsample_scalar[0] == -1 or self.of_downsample_scalar[0] == 1 else str(1),
             r'\$compute_optical_flow\$': str(0),
             r'\$use_point_cloud\$': str(1),
@@ -512,11 +405,9 @@ class OpPreprocessor(AbsPreprocessor):
             openvslam_model_file_list = ["../Capture/openvslam/cameras.txt",\
                                                    "../Capture/openvslam/frame_trajectory_with_filename.txt",\
                                                    "../Capture/openvslam/map.msg"]
-            openvslam_model_file_list_check = [re.sub(r"\.\.", self.root_dir.as_posix(),\
-                                        file_path, flags=re.M) for file_path in openvslam_model_file_list]
-            for file in openvslam_model_file_list_check:
-                if not os.path.exists(file):
-                    self.show_info("The {} do not exist.".format(file), "error")
+            for filename in openvslam_model_file_list:
+                if not (self.output_config_file_path / filename).is_file():
+                    raise FileNotFoundError(f"Missing OpenVSLAM input: {filename}")
             model_file_content_openvslam = "\n".join(openvslam_model_file_list)
             with open(str(self.output_config_file_path / output_model_file_name), 'w') as file_handle:
                 file_handle.write(model_file_content_openvslam)
@@ -542,11 +433,9 @@ class OpPreprocessor(AbsPreprocessor):
             colmap_model_file_list = ["../Capture/COLMAP/cameras.txt",\
                                   "../Capture/COLMAP/images.txt",\
                                   "../Capture/COLMAP/points3D.txt"]
-            colmap_model_file_list_check = [re.sub(r'..', self.root_dir.as_posix(),\
-                                        file_path, flags=re.M) for file_path in colmap_model_file_list]
-            for file in colmap_model_file_list_check:
-                if not os.path.exists(file):
-                    self.show_info("The {} do not exist.".format(file), "error")
+            for filename in colmap_model_file_list:
+                if not (self.output_config_file_path / filename).is_file():
+                    raise FileNotFoundError(f"Missing COLMAP input: {filename}")
             model_file_content_colmap = "\n".join(colmap_model_file_list)
             with open(str(self.output_config_file_path / output_model_file_name), 'w') as file_handle:
                 file_handle.write(model_file_content_colmap)
@@ -575,45 +464,6 @@ class OpPreprocessor(AbsPreprocessor):
         with open(str(dest_folder / "Cameras.csv"), "w") as file_handle:
             file_handle.write(cameras_csv_all_text)
 
-    def file_structure_trim(self):
-        """
-        Create the destination file structure define in readme.md. \
-        Copy the the essential files to the destination directory, and back up the original files.
-        NOTE: all file/directory path is relative path to root_dir
-        """
-        # 1) create the backup directories
-        if self.capture_data_backup_dir.exists():
-            self.show_info("The backup directory {} already exists"\
-                .format(str(self.capture_data_backup_dir)))
-        self.dir_make(self.capture_data_backup_dir)
-
-        # 2) backup files, and just remain the essential files
-        move_file_list = {}
-        copy_file_list = {}
-        if self.trajectory_tool == "all" or self.trajectory_tool == "openvslam":
-            move_file_list[self.capture_data_dir / "openvslam"] = self.capture_data_backup_dir / "openvslam"
-            for term in self.openvslam_essential_file_list:
-                copy_file_list.update({self.capture_data_backup_dir / "openvslam" / term: \
-                        self.capture_data_dir / "openvslam" / term})
-
-        if self.trajectory_tool == "all" or self.trajectory_tool == "colmap":
-            move_file_list[self.capture_data_dir / "COLMAP"] = self.capture_data_backup_dir /  "COLMAP"
-            for term in self.colmap_essential_file_list:
-                copy_file_list.update({
-                    self.capture_data_backup_dir /"COLMAP/full-model-ba-txt" / term: \
-                        self.capture_data_dir / "COLMAP" / term})
-
-        # backup files
-        for key, value in move_file_list.items():
-            if value.exists():
-                self.show_info("Backup folder {} exist, can not backup".format(str(value)), "error")
-            key.rename(value)
-            self.dir_make(key)
-
-        # copy essential OmniPhotos openvslam & COLMAP files to capture directory
-        for key, value in copy_file_list.items():
-            shutil.copy(str(key), str(value))
-
     def openvslam_convert_traj_file(self,
                                     openvslam_output_directory,
                                     openvslam_config_file_path):
@@ -640,7 +490,7 @@ class OpPreprocessor(AbsPreprocessor):
         # load openvslam YAML config file get FPS
         with open(openvslam_config_file_path, "r") as yaml_config_file_handle:
             ovslam_config_str = yaml_config_file_handle.read()
-        ovslam_config_data = yaml.load(ovslam_config_str, Loader=yaml.CLoader)
+        ovslam_config_data = yaml.safe_load(ovslam_config_str)
         ovslam_fps = ovslam_config_data["Camera.fps"]
 
         # load frame_trajectory.txt
@@ -668,7 +518,7 @@ class OpPreprocessor(AbsPreprocessor):
             else:
                 csv_rows = list(yaml_traj_csv_file_handle)
                 for enum,idx in enumerate(self.desired_frame_indices):
-                    if self.image_start_idx < idx < self.image_end_idx:
+                    if self.image_start_idx <= idx <= self.image_end_idx:
                         row = csv_rows[enum]
                         row[0] = self.original_filename_expression % idx
                         yaml_traj_csv_file_handle_output.writerow([str(idx)] + row)
@@ -704,8 +554,8 @@ class OpPreprocessor(AbsPreprocessor):
         """
         json_file_path = msg_file_path + ".json"
         obj_file_path = msg_file_path + ".obj"
-        data = open(msg_file_path, 'rb')
-        data_text = msgpack.Unpacker(data, raw=False).unpack()
+        with open(msg_file_path, 'rb') as data:
+            data_text = msgpack.Unpacker(data, raw=False, strict_map_key=False).unpack()
 
         # 1) convert the msg to json
         self.show_info("Output OpenVSLAM msg file to json : {}".format(json_file_path))

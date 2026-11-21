@@ -247,7 +247,7 @@ bool CameraSetupDataset::loadFromCache(CameraSetupSettings* settings)
 	}
 
 	VLOG(1) << "Finished reading json file.";
-	return 0;
+	return true;
 }
 
 

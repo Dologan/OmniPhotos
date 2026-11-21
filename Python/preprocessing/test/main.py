@@ -11,6 +11,7 @@ from preproc_app import PreprocAPP
 # isn't in the root directory the imports don't work.
 
 
+from frame_preparation import TestFramePreparation
 from itests import TestCircleSelector
 from utests import *
 

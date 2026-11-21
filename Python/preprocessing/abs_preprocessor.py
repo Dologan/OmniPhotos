@@ -13,8 +13,9 @@ import inspect
 import os
 import pathlib
 import re
+from fractions import Fraction
 
-import PIL
+from PIL import Image
 import yaml
 import numpy as np
 
@@ -98,9 +99,7 @@ class AbsPreprocessor:
 
 
         # NOTE: op_image_list gets overwritten by op_preprocessor if preprocessing.find_stable_cirle is True
-        self.set_op_image_list(self.original_filename_expression,
-                               self.config["preprocessing.frame_fixed_number"], self.image_start_idx,
-                               self.image_end_idx)
+        self.op_image_list = self.trajectory_images_list.copy()
 
 
         self.image_list = self.op_image_list
@@ -126,39 +125,22 @@ class AbsPreprocessor:
         # COLMAP / openvslam necessary files
         self.openvslam_output_file_list = ["map.msg", "frame_trajectory.txt"]
         self.openvslam_essential_file_list = ["map.msg", "frame_trajectory_with_filename.txt", "cameras.txt"]
-        self.colmap_essential_file_list = ["points3D.txt", "images.txt", "cameras.txt", "full_model_ba_points3D.ply"]
+        self.colmap_essential_file_list = ["points3D.txt", "images.txt", "cameras.txt"]
 
         # default settting
         self.cache_folder_name = None
 
         self.check_config()
-    def set_op_image_list(self,filename_expression,
-                          frame_fixed_number,
-                          image_start_idx,
-                          image_end_idx):
-
-        if frame_fixed_number <= 0:
-            self.op_image_list = self.trajectory_images_list[self.image_start_idx:self.image_end_idx]
-        else:
-            self.op_image_list = []
-            for enum,idx in enumerate(self.desired_frame_indices):
-                if image_start_idx < idx < image_end_idx:
-                    self.op_image_list.append(self.trajectory_images_list[enum])
-
-    def set_trajectory_images_list(self, filename_expression,
-                                   frame_fixed_number):
-        # generate the list of desired frame indices
-        if frame_fixed_number <= 0:
-            vframes_size = 1  # NOTE : should be 1
-            frame_idx_list = list(range(0, self.frame_number, vframes_size))
-        else:
-            frame_idx_list = \
-                np.linspace(start=0, \
-                            stop=self.frame_number, num=frame_fixed_number)
-            frame_idx_list = list(frame_idx_list.astype(int))
-        self.desired_frame_indices = frame_idx_list
-        self.trajectory_images_list = [filename_expression % frame for frame in frame_idx_list]  # files to keep
-        self.trajectory_images_list = [os.path.basename(f) for f in self.trajectory_images_list]  # filenames to keep
+    def set_trajectory_images_list(self, filename_expression, frame_fixed_number):
+        count = self.image_end_idx - self.image_start_idx + 1
+        limit = min(frame_fixed_number, count) if frame_fixed_number > 0 else count
+        self.desired_frame_indices = np.linspace(
+            self.image_start_idx, self.image_end_idx, num=limit, dtype=int
+        ).tolist()
+        self.trajectory_images_list = [
+            os.path.basename(filename_expression % index)
+            for index in self.desired_frame_indices
+        ]
 
     def load_config(self, args):
         """
@@ -167,39 +149,29 @@ class AbsPreprocessor:
         """
         # load YAML config file
         config_file = args["config_file"]
-        config_file_path = pathlib.Path(config_file)
-        if config_file == "" or not config_file_path.exists():
-            msg = "config_file path is wrong: {}".format(args["config_file"])
-            self.show_info(msg)
+        config_file_path = pathlib.Path(config_file).resolve(strict=True)
+        if not config_file_path.is_file():
+            raise ValueError(f"Expected a YAML file: {config_file_path}")
 
         # set the root folder
         self.root_dir = config_file_path.parents[0]
         self.temp_dir = self.root_dir / "temp"
+
+        with config_file_path.open(encoding="utf-8-sig") as config_file:
+            self.config = yaml.safe_load(config_file)
+        if not isinstance(self.config, dict):
+            raise ValueError(f"Expected a mapping in {config_file_path}")
+
+        if args.get("input_path") is not None:
+            input_path = pathlib.Path(args["input_path"]).resolve(strict=True)
+            self.config["preprocessing.input_path"] = str(input_path)
+            self.config["preprocessing.input_type"] = "image" if input_path.is_dir() else "video"
+
+        for key, value in self.config.items():
+            if value is None:
+                raise ValueError(f"Preprocessing option {key} needs a value.")
+
         self.dir_make(self.temp_dir)
-
-        with open(config_file_path, "r") as yaml_config_file_handle:
-            config_str = yaml_config_file_handle.read()
-        self.config = yaml.load(config_str, Loader=yaml.CLoader)
-
-        # check the unset configuration
-        for term in self.config:
-            if self.config[term] is None:
-                self.show_info("Preprocessing yaml file options {} are not set.".format(term), "error")
-
-        # get config from CLI parameters, to replace the same one in YAML file
-        for term_key, term_value in args.items():
-            if not term_value is None:
-                self.show_info("Value {} is not set".format(term_key))
-                continue
-            self.config["preprocessing." + term_key] = term_value
-
-        # check the config, check the essential parameters
-        for term_key, term_value in self.config.items():
-            msg = ""
-            if term_value is None:
-                msg = 'Variable {} : {} is not set'.format(term_key, str(term_value))
-            if msg != "":
-                self.show_info(msg, "info")
 
     def check_config(self):
         """
@@ -219,21 +191,29 @@ class AbsPreprocessor:
         """
         # load data
         if self.input_type == 'video':
-            # get video information
-            probe = ffmpeg.probe(str(self.input_path))
-            video_stream = next((stream for stream in probe['streams'] \
-                                 if stream['codec_type'] == 'video'), None)
-            self.frame_width = int(video_stream['width'])
-            self.frame_height = int(video_stream['height'])
-            self.frame_fps = int(eval(video_stream['r_frame_rate']))
-            self.frame_number = int(video_stream['nb_frames'])
+            video_stream = next(iter(ffmpeg.probe(str(self.input_path), select_streams="v:0")["streams"]), None)
+            if video_stream is None:
+                raise ValueError(f"No video stream found in {self.input_path}")
+            self.frame_width = int(video_stream["width"])
+            self.frame_height = int(video_stream["height"])
+            rate = video_stream.get("avg_frame_rate")
+            if rate in (None, "0/0", "0/1"):
+                rate = video_stream["r_frame_rate"]
+            self.frame_fps = float(Fraction(rate))
+            count = video_stream.get("nb_frames")
+            if count in (None, "N/A"):
+                result = ffmpeg.probe(str(self.input_path), select_streams="v:0", count_frames=None)
+                count = result["streams"][0].get("nb_read_frames")
+            if count in (None, "N/A") or int(count) < 1 or self.frame_fps <= 0:
+                raise ValueError(f"Could not determine frame count and frame rate for {self.input_path}")
+            self.frame_number = int(count)
         elif self.input_type == 'image':
             if not self.input_path.is_dir():
                 msg = "The images input path {} is not a folder.".format(self.input_path)
                 raise RuntimeError(msg)
             self.get_image_file_list(self.input_path, self.original_image_list)
-            self.frame_width, self.frame_height = \
-                PIL.Image.open(str(self.input_path / self.original_image_list[0])).size
+            with Image.open(self.input_path / self.original_image_list[0]) as first_image:
+                self.frame_width, self.frame_height = first_image.size
             self.frame_number = len(self.original_image_list)
         else:
             msg = 'Input_type error : {}'.format(self.input_type)
@@ -258,12 +238,8 @@ class AbsPreprocessor:
         # if image_directory == None:
         #     image_directory = str(self.image_output_path)
 
-        file_list = []
-        for (_, _, files) in os.walk(image_directory):
-            for filename in files:
-                if filename.endswith('.png') or filename.endswith('.jpg') \
-                        or filename.endswith('.jpeg'):
-                    file_list.append(filename)
+        file_list = [entry.name for entry in pathlib.Path(image_directory).iterdir()
+                     if entry.is_file() and entry.suffix.lower() in {".png", ".jpg", ".jpeg"}]
         if len(file_list) == 0:
             msg = "There are no images in {}".format(image_directory)
             self.show_info(msg, "error")

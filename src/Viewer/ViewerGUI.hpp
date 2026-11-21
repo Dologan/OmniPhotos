@@ -1,7 +1,7 @@
 #pragma once
 
-#include "3rdParty/imgui/examples/imgui_impl_glfw.h"
-#include "3rdParty/imgui/examples/imgui_impl_opengl3.h"
+#include "3rdParty/imgui/backends/imgui_impl_glfw.h"
+#include "3rdParty/imgui/backends/imgui_impl_opengl3.h"
 #include "3rdParty/imgui/imgui.h"
 
 #include <GL/gl3w.h>

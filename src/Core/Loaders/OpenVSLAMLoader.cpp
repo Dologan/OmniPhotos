@@ -257,14 +257,17 @@ void OpenVSLAMLoader::readPathsFromModelFiles(const std::string& slamResultListP
 	try
 	{
 		getline(reader, pathToCameras);
+		pathToCameras = rtrim(pathToCameras, "\r");
 		if (!pathToCameras.empty())
 			pathToCameras = fs::canonical(configDirectory / pathToCameras).generic_string();
 
 		getline(reader, pathToImages);
+		pathToImages = rtrim(pathToImages, "\r");
 		if (!pathToImages.empty())
 			pathToImages = fs::canonical(configDirectory / pathToImages).generic_string();
 
 		getline(reader, pathTo3DPoints);
+		pathTo3DPoints = rtrim(pathTo3DPoints, "\r");
 		if (!pathTo3DPoints.empty())
 			pathTo3DPoints = fs::canonical(configDirectory / pathTo3DPoints).generic_string();
 	}

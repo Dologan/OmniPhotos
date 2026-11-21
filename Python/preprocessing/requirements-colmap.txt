@@ -1,0 +1,3 @@
+# CPU build for Windows and Linux. For supported CUDA installations, replace
+# this package with pycolmap-cuda12 of the same version in a fresh environment.
+pycolmap==4.2.1

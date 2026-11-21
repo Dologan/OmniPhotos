@@ -11,7 +11,6 @@ from data_preprocessor import DataPreprocessor
 from traj_preprocessor import TrajPreprocessor
 from op_preprocessor import OpPreprocessor
 from of_preprocessor import OfPreprocessor
-from graph_ui import GraphUI
 from cl_ui import ClUI
 
 
@@ -31,15 +30,14 @@ class PreprocAPP:
         if args["headless"]:
             self.interface = ClUI()
         else:
+            from graph_ui import GraphUI
+
             self.interface = GraphUI("OmniPhotos Preprocessing")
         # register the callback function
         self.interface.before_exit = self.callback_exit
         AbsPreprocessor.abs_ui = self.interface  # register UI
 
         self.data_preproc = DataPreprocessor(args)
-        self.traj_preproc = TrajPreprocessor(args)
-        self.op_preproc = OpPreprocessor(args)
-        self.of_preproc = OfPreprocessor(args)
 
     def callback_exit(self):
         """
@@ -70,11 +68,14 @@ class PreprocAPP:
         if step_end == -1:
             step_end = 4
 
+        if not 1 <= step_begin <= step_end <= 4:
+            raise ValueError("Step range must be within 1 to 4, with start before or equal to end.")
+
         preprocessor_flow = {
-            1: ["Extracting and preprocessing video frames", self.data_preproc.preprocess_data],
-            2: ["Reconstructing the camera trajectory", self.traj_preproc.trajectory_reconstruct],
-            3: ["Generating config file for OmniPhotos", self.op_preproc.generating_config_files],
-            4: ["Computing FlowNet2 optical flow", self.of_preproc.compute_of]
+            1: ("Extracting and preprocessing video frames", self.data_preproc.preprocess_data),
+            2: ("Reconstructing the camera trajectory", lambda: TrajPreprocessor(self.args).trajectory_reconstruct()),
+            3: ("Generating the OmniPhotos dataset", lambda: OpPreprocessor(self.args).generating_config_files()),
+            4: ("Computing FlowNet2 optical flow", lambda: OfPreprocessor(self.args).compute_of()),
         }
 
         for step_idx, step_data in preprocessor_flow.items():
@@ -91,6 +92,10 @@ class PreprocAPP:
         """
         main loop
         """
+        if self.args["headless"]:
+            self.method()
+            return
+
         # create preprocessing thread
         self.method_thread = threading.Thread(target=self.method)
         self.method_thread.daemon = True  # for terminate the thread

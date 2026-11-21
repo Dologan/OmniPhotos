@@ -1,11 +1,11 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.16)
 project(OmniPhotos)
 
 # Add to module path, so we can find our cmake modules
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules)
 
-# Enable C++11
-set(CMAKE_CXX_STANDARD 11)
+# Enable C++17
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -56,7 +56,7 @@ find_package(Eigen 3.2 REQUIRED)
 include_directories(${EIGEN_INCLUDE_DIR})
 
 ## OpenCV
-find_package(OpenCV 4.1.1 REQUIRED NO_DEFAULT_PATH)
+find_package(OpenCV 4.2 REQUIRED)
 include_directories(${OpenCV_INCLUDE_DIRS})
 
 ## OpenMP (optional)
@@ -71,7 +71,7 @@ include_directories(${json_INCLUDE_DIR})
 if(EXISTS glog)
   add_subdirectory(glog)
 else() 
-  find_package(glog 0.4.0 REQUIRED)
+  find_package(glog 0.6 REQUIRED)
 endif()
 
 if(MSVC)
@@ -98,7 +98,7 @@ option(USE_CERES "Use Ceres in certain apps." OFF)
 option(USE_CUDA_IN_OPENCV "Use CUDA in OpenCV." OFF)
 
 ## Additional things that are not built by default.
-option(WITH_OPENVR "Build with OpenVR." ${OPENVR_FOUND})
+option(WITH_OPENVR "Build with OpenVR." OFF)
 option(WITH_TEST "Build tests." OFF)
 option(WITH_TOOLS "Build with tools." OFF)
 
@@ -116,7 +116,7 @@ endif()
 
 
 if(WITH_OPENVR)
-  set(OPENVR_ROOT_DIR "src/3rdParty/openvr")
+  set(OPENVR_ROOT_DIR "${CMAKE_SOURCE_DIR}/src/3rdParty/openvr" CACHE PATH "Directory containing the OpenVR SDK")
   find_package(OpenVR REQUIRED)
   if(OPENVR_FOUND)
     message(STATUS "With OpenVR.")
@@ -160,5 +160,6 @@ add_subdirectory(src/Preprocessing)
 add_subdirectory(src/Viewer)
 
 if(WITH_TEST)
+  enable_testing()
   add_subdirectory(src/Test)
 endif()

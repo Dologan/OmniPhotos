@@ -95,8 +95,8 @@ int main(int argc, char* argv[])
 		ss << "  Binary       : " << getBinaryPath().generic_string() << "\n";
 		ss << "  Current path : " << fs::current_path().generic_string() << "\n";
 		ss << "  Version      : " << g_GIT_VERSION << "\n";
-		for (int i = 1; i <= argc; i++)
-			ss << "  Argument " << i << "/" << argc << " : '" << argv[i] << "'\n";
+		for (int i = 1; i < argc; i++)
+			ss << "  Argument " << i << "/" << (argc - 1) << " : '" << argv[i] << "'\n";
 		LOG(INFO) << "Startup information:\n"
 		          << ss.str() << "\n";
 

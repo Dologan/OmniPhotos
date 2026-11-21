@@ -17,8 +17,8 @@ Geometry:
     CylinderRadius: 20.0
 
 Camera:
-    Name: "Insta360 One X"
-    Equirectangular: 1
+    Name: "OmniPhotos capture"
+    Equirectangular: $equirectangular$
 
 Video:
     FirstFrame: $first_frame$

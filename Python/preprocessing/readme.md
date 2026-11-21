@@ -1,5 +1,7 @@
 # 0. Introduction
 
+For Python 3.12, PyCOLMAP, the desktop launcher and Quest Link, see the [modern workflow](../../docs/modernization.md). This guide documents the historical OpenVSLAM and FlowNet2 workflow.
+
 This pre-processing pipeline prepares datasets for OmniPhotos preprocessing from videos captured with a 360° camera, such as an [Insta360 One X](https://www.insta360.com/product/insta360-onex).
 
 The preprocessing application's GUI looks as follows. The red box is the preview window and the yellow is the logging window.

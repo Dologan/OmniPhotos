@@ -42,49 +42,30 @@ target_include_directories(${MODULE_NAME}
 #  <GL/gl3w.h>
 #)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_libraries(${MODULE_NAME} PUBLIC OpenGL::GLX ${CMAKE_DL_LIBS})
+endif()
+
 set_property(TARGET "3rdParty" PROPERTY FOLDER "3rdParty")
 
 
 ## Set up imgui as a library --------------------------------------------------
 
-find_package(Git QUIET)
-
-message(STATUS "Submodule update for imgui")
-execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init
-                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-                RESULT_VARIABLE GIT_RESULT)
-# execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --remote
-#                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-#                 RESULT_VARIABLE GIT_RESULT)
-
-if(NOT GIT_RESULT EQUAL "0")
-  message(FATAL_ERROR "'git submodule update --init' failed with ${GIT_RESULT}, please checkout submodules")
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/imgui/imgui.cpp")
+  message(FATAL_ERROR "Dear ImGui is missing. Run git submodule update --init src/3rdParty/imgui.")
 endif()
 
-set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-
 add_library(imgui
-  "${IMGUI_DIR}/imgui/imgui.cpp"
-  #"${IMGUI_DIR}/imgui/imgui.h"
-  "${IMGUI_DIR}/imgui/imgui_demo.cpp"
-  "${IMGUI_DIR}/imgui/imgui_draw.cpp"
-  #"${IMGUI_DIR}/imgui/imgui_internal.h"
-  "${IMGUI_DIR}/imgui/imgui_widgets.cpp"
-  #"${IMGUI_DIR}/imgui/imstb_rectpack.h"
-  #"${IMGUI_DIR}/imgui/imstb_textedit.h"
-  #"${IMGUI_DIR}/imgui/imstb_truetype.h"
-  "${IMGUI_DIR}/imgui/examples/imgui_impl_glfw.cpp"
-  "${IMGUI_DIR}/imgui/examples/imgui_impl_opengl3.cpp"
+  imgui/imgui.cpp
+  imgui/imgui_demo.cpp
+  imgui/imgui_draw.cpp
+  imgui/imgui_tables.cpp
+  imgui/imgui_widgets.cpp
+  imgui/backends/imgui_impl_glfw.cpp
+  imgui/backends/imgui_impl_opengl3.cpp
 )
 
-# Tell imgui to use GL3W as OpenGL loader instad of guessing.
-target_compile_definitions("imgui" PRIVATE IMGUI_IMPL_OPENGL_LOADER_GL3W)
-
-target_include_directories("imgui"
-  PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/imgui"
-    "${CMAKE_CURRENT_SOURCE_DIR}/imgui/examples"
-)
+target_include_directories(imgui PUBLIC imgui imgui/backends)
 
 target_link_libraries("imgui"
   PUBLIC

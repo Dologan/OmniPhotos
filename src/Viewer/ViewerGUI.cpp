@@ -22,7 +22,7 @@ ViewerGUI::~ViewerGUI()
 	// Release the dataset thumbnail textures.
 	for (int idx = 0; idx < datasetThumbList.size(); idx++)
 	{
-		const GLuint text_id = static_cast<GLint>(reinterpret_cast<intptr_t>(datasetThumbList[idx]));
+		const GLuint text_id = static_cast<GLuint>(datasetThumbList[idx]);
 		glDeleteTextures(1, &text_id);
 	}
 
@@ -423,7 +423,7 @@ void ViewerGUI::showDatasets()
 			glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, image.cols, image.rows, 0, GL_BGR, GL_UNSIGNED_BYTE, image.data);
 
-			datasetThumbList.push_back(reinterpret_cast<void*>(static_cast<intptr_t>(texture)));
+			datasetThumbList.push_back(static_cast<ImTextureID>(texture));
 		}
 	}
 
@@ -438,7 +438,7 @@ void ViewerGUI::showDatasets()
 		ImGui::BeginGroup();
 
 		// Show dataset name
-		ImGui::TextWrapped(app->getDatasetFromList(i).name.c_str());
+		ImGui::TextWrapped("%s", app->getDatasetFromList(i).name.c_str());
 
 		// Change the current/loading dataset visualisation.
 		static unsigned int counter = 0;
@@ -456,12 +456,12 @@ void ViewerGUI::showDatasets()
 			}
 
 			ImGui::SameLine();
-			ImGui::TextWrapped(info.c_str());
+			ImGui::TextWrapped("%s", info.c_str());
 		}
 
 		// Add image button.
 		ImGui::PushID(i);
-		if (ImGui::ImageButton(datasetThumbList[i], ImVec2(240, 120)))
+		if (ImGui::ImageButton("thumbnail", datasetThumbList[i], ImVec2(240, 120)))
 		{
 			LOG(INFO) << "Selected dataset '" << app->getDatasetFromList(i).name << "' to be loaded";
 			counter = 0;

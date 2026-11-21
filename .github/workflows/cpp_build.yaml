@@ -1,62 +1,67 @@
-# This is a basic workflow to help you get started with Actions
+name: C++ build and tests
 
-name: C++ Build and Tests
-
-# Controls when the action will run. 
-on:
-  # Triggers the workflow on push or pull request events but only for the main branch
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
+on: [push, pull_request, workflow_dispatch]
 
 env:
-  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
-  BUILD_TYPE: Release
+  FIXTURE_URL: https://github.com/cr333/OmniPhotos/releases/download/v1.0/OmniPhotos-test-data.zip
+  FIXTURE_SHA256: 5b9380c2004fae49af7f52de774ddfbdb7952d61b98a9d9aa146fe8351b1ce1d
 
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  build:
-    # The type of runner that the job will run on
-    runs-on: windows-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+  linux:
+    runs-on: ubuntu-24.04
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v2
-      - 
-       name: Download and Extract Dependencies 
-       run: |
-         curl https://github.com/opencv/opencv/releases/download/4.5.1/opencv-4.5.1-dldt-2021.2-vc16-avx2.zip -o opencv.zip -L
-         tar -xf opencv.zip -C ${{github.workspace}}
-         git clone https://github.com/google/glog.git
-         cd glog
-         git checkout c8f8135a5720aee7de8328b42e4c43f8aa2e60aa
-         cd ..
-         git clone https://gitlab.com/libeigen/eigen.git
-         cd eigen
-         git checkout 3.3.2
-         cd ..
-         git clone https://github.com/glfw/glfw.git
-         cd glfw
-         git checkout 3.3.2
-         cmake -E make_directory ${{github.workspace}}/glfw/build
-         cmake -S . -B build -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/install-glfw -DBUILD_SHARED_LIBS=TRUE -DCMAKE_BUILD_TYPE=$BUILD_TYPE
-         cmake --build build --target INSTALL --config Release
-      
-      - name: Build OmniPhotos
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - name: Install dependencies
         run: |
-          cmake -E make_directory ${{github.workspace}}/build
-          cmake -S . -B build -DEIGEN_INCLUDE_DIR:PATH=${{github.workspace}}/eigen -DOpenCV_DIR:PATH=${{github.workspace}}/opencv/build/cmake -Dglfw3_DIR:PATH=${{github.workspace}}/install-glfw/lib/cmake/glfw3 -DWITH_TEST=TRUE -DWITH_OPENVR=TRUE -DWITH_GFLAGS=FALSE -DBUILD_GMOCK=FALSE -DBUILD_TESTING=FALSE
-          cmake --build build --config Release
-      
-      - name: Download data and run tests
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libglfw3-dev libeigen3-dev libopencv-dev ninja-build
+          git clone --depth 1 --branch v0.7.1 https://github.com/google/glog.git "$RUNNER_TEMP/glog"
+          test "$(git -C "$RUNNER_TEMP/glog" rev-parse HEAD)" = 7b134a5c82c0c0b5698bb6bf7a835b230c5638e4
+          cmake -S "$RUNNER_TEMP/glog" -B "$RUNNER_TEMP/glog-build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/glog-install" -DWITH_GFLAGS=OFF -DWITH_UNWIND=OFF -DBUILD_TESTING=OFF
+          cmake --build "$RUNNER_TEMP/glog-build"
+          cmake --install "$RUNNER_TEMP/glog-build"
+      - name: Download dataset fixture
         run: |
-          curl https://github.com/cr333/OmniPhotos/releases/download/v1.0/OmniPhotos-test-data.zip -o testDatasets.zip -L
-          tar -xf testDatasets.zip -C ${{github.workspace}}
-          cd opencv/build/bin/
-          ${{github.workspace}}/build/Release/Test.exe -f ${{github.workspace}}/testDatasets/
-          
+          curl --fail --location --retry 2 "$FIXTURE_URL" -o "$RUNNER_TEMP/testDatasets.zip"
+          cd "$RUNNER_TEMP"
+          printf '%s  %s\n' "$FIXTURE_SHA256" testDatasets.zip | sha256sum --check
+          unzip -q testDatasets.zip
+      - name: Build and test
+        env:
+          OMP_NUM_THREADS: '4'
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/glog-install" -DWITH_TEST=ON -DOMNIPHOTOS_TEST_DATA="$RUNNER_TEMP/testDatasets"
+          cmake --build build --parallel 4
+          ctest --test-dir build --output-on-failure
+
+  windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          vcpkg install opencv4 glfw3 eigen3 glog --triplet x64-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git clone --depth 1 --branch v2.15.6 https://github.com/ValveSoftware/openvr.git "$env:RUNNER_TEMP/openvr"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Download dataset fixture
+        shell: pwsh
+        run: |
+          $archive = "$env:RUNNER_TEMP/testDatasets.zip"
+          curl.exe --fail --location --retry 2 $env:FIXTURE_URL -o $archive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $archive).Hash.ToLower() -ne $env:FIXTURE_SHA256) { throw 'Unexpected dataset checksum' }
+          Expand-Archive $archive $env:RUNNER_TEMP
+      - name: Build and test
+        shell: pwsh
+        run: |
+          cmake -S . -B build -A x64 "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DWITH_OPENVR=ON "-DOPENVR_ROOT_DIR=$env:RUNNER_TEMP/openvr" -DWITH_TEST=ON "-DOMNIPHOTOS_TEST_DATA=$env:RUNNER_TEMP/testDatasets"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build -C Release --output-on-failure

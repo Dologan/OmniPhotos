@@ -10,6 +10,9 @@
 #include "Viewer/ViewerGLProgram.hpp"
 #include "Viewer/ViewerGUI.hpp"
 
+#include <future>
+#include <memory>
+
 
 /**
  * @brief  Main application that displays OmniPhotos and handles user input.
@@ -141,25 +144,16 @@ private:
 	std::vector<CameraSetupDataset> datasetInfoList;
 
 	/** List of all found proxy meshes. */
-	std::vector<Mesh*> loaded_meshes;
-	std::vector<Mesh*> loaded_meshes_back; // used for asynchronuous loading
+	std::vector<std::unique_ptr<Mesh>> loaded_meshes;
+	std::vector<std::unique_ptr<Mesh>> loaded_meshes_back;
 
 	CameraSetupSettings appSettings;
 
-	/** Back-buffer dataset storage and semaphore for background dataset loading. */
-	enum class DatasetStatus
-	{
-		Empty = 0,   // background dataset empty
-		Loading = 1, // background dataset is loading
-		Loaded = 2,  // background dataset loaded to CPU, ready for GPU loading
-	};
-	DatasetStatus datasetBackStatus = DatasetStatus::Empty;
-	CameraSetupDataset* datasetBack = nullptr;
+	std::future<void> datasetLoad;
+	int pendingDatasetIdx = -1;
+	std::unique_ptr<CameraSetupDataset> datasetBack;
 	CameraSetupSettings datasetBackSetting;
-
-	// TODO: We should re-use the texture loader, but update its buffers!
-	// I think it's fine to "back" it, the important bit is to "update" the render models in the Visualization
-	TextureLoader* textureLoaderBack = nullptr;
+	std::unique_ptr<TextureLoader> textureLoaderBack;
 
 	ViewerGLProgram* megastereo_prog = nullptr;
 	ViewerGLProgram* megaparallax_prog = nullptr;

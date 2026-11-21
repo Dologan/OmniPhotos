@@ -217,7 +217,7 @@ void drawOpticalFlow(const cv::Mat_<float>& flowx, const cv::Mat_<float>& flowy,
 			for (int x = 0; x < flowx.cols; ++x)
 			{
 				cv::Point2f u(flowx(y, x), flowy(y, x));
-				maxrad = std::max(maxrad, sqrt(u.x * u.x + u.y * u.y));
+				maxrad = std::max(maxrad, std::hypot(u.x, u.y));
 			}
 		}
 	}

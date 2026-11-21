@@ -3,6 +3,7 @@
 #include "3rdParty/fs_std.hpp"
 
 #include "Utils/Utils.hpp"
+#include "Utils/STLutils.hpp"
 
 #ifndef _countof
 	#define _countof(x) (sizeof(x) / sizeof((x)[0]))
@@ -54,8 +55,10 @@ std::string getTrackedDeviceString(
 
 bool getDigitalActionRisingEdge(vr::VRActionHandle_t action, vr::VRInputValueHandle_t* pDevicePath)
 {
-	vr::InputDigitalActionData_t actionData;
-	vr::VRInput()->GetDigitalActionData(action, &actionData, sizeof(actionData), vr::k_ulInvalidInputValueHandle);
+	vr::InputDigitalActionData_t actionData{};
+	if (vr::VRInput()->GetDigitalActionData(action, &actionData, sizeof(actionData), vr::k_ulInvalidInputValueHandle)
+	    != vr::VRInputError_None)
+		return false;
 	if (pDevicePath)
 	{
 		*pDevicePath = vr::k_ulInvalidInputValueHandle;
@@ -74,8 +77,10 @@ bool getDigitalActionRisingEdge(vr::VRActionHandle_t action, vr::VRInputValueHan
 
 bool getDigitalActionFallingEdge(vr::VRActionHandle_t action, vr::VRInputValueHandle_t* pDevicePath)
 {
-	vr::InputDigitalActionData_t actionData;
-	vr::VRInput()->GetDigitalActionData(action, &actionData, sizeof(actionData), vr::k_ulInvalidInputValueHandle);
+	vr::InputDigitalActionData_t actionData{};
+	if (vr::VRInput()->GetDigitalActionData(action, &actionData, sizeof(actionData), vr::k_ulInvalidInputValueHandle)
+	    != vr::VRInputError_None)
+		return false;
 	if (pDevicePath)
 	{
 		*pDevicePath = vr::k_ulInvalidInputValueHandle;
@@ -94,8 +99,10 @@ bool getDigitalActionFallingEdge(vr::VRActionHandle_t action, vr::VRInputValueHa
 
 bool getDigitalActionState(vr::VRActionHandle_t action, vr::VRInputValueHandle_t* pDevicePath)
 {
-	vr::InputDigitalActionData_t actionData;
-	vr::VRInput()->GetDigitalActionData(action, &actionData, sizeof(actionData), vr::k_ulInvalidInputValueHandle);
+	vr::InputDigitalActionData_t actionData{};
+	if (vr::VRInput()->GetDigitalActionData(action, &actionData, sizeof(actionData), vr::k_ulInvalidInputValueHandle)
+	    != vr::VRInputError_None)
+		return false;
 	if (pDevicePath)
 	{
 		*pDevicePath = vr::k_ulInvalidInputValueHandle;
@@ -159,7 +166,10 @@ bool VRInterface::initOpenVR()
 	}
 
 	std::string pathToJson = (fs::absolute(determinePathToSource()) / "Core/GUI/vr_actions.json").string();
-	vr::VRInput()->SetActionManifestPath(pathToJson.c_str());
+	const auto manifestError = vr::VRInput()->SetActionManifestPath(pathToJson.c_str());
+	if (manifestError != vr::VRInputError_None)
+		LOG(WARNING) << "SteamVR action manifest could not be loaded from " << pathToJson
+		             << " (error " << manifestError << ").";
 
 	vr::VRInput()->GetActionHandle("/actions/omniphotos/in/ToggleMethod", &actionToggleMethod);
 	vr::VRInput()->GetActionHandle("/actions/omniphotos/in/ToggleDisplayMode", &actionToggleDisplayMode);
@@ -219,7 +229,7 @@ Mesh* VRInterface::findOrLoadControllerMesh(std::vector<Mesh*>& _hmd_ui_meshes, 
 	for (std::vector<Mesh*>::iterator i = _hmd_ui_meshes.begin(); i != _hmd_ui_meshes.end(); i++)
 	{
 		std::string name = (*i)->name;
-		if (!_stricmp(name.c_str(), pchRenderModelName.c_str()))
+		if (lower(name) == lower(pchRenderModelName))
 		{
 			mesh = *i;
 			break;
@@ -403,13 +413,13 @@ void VRInterface::handleControllerActions()
 	}
 
 	// Toggle rendering method between MegaParallax/OmniPhotos (default) and Megastereo.
-	if (getDigitalActionRisingEdge(actionToggleMethod, vr::k_ulInvalidInputValueHandle))
+	if (getDigitalActionRisingEdge(actionToggleMethod))
 	{
 		app->settings->switchGLProgram = 1 - app->settings->switchGLProgram;
 	}
 
 	// Toggle display mode between LinearBlending (default) and WorldLines.
-	if (getDigitalActionRisingEdge(actionToggleDisplayMode, vr::k_ulInvalidInputValueHandle))
+	if (getDigitalActionRisingEdge(actionToggleDisplayMode))
 	{
 		if (app->settings->displayMode == LinearBlending)
 		{
@@ -422,31 +432,31 @@ void VRInterface::handleControllerActions()
 	}
 
 	// Load the next dataset.
-	if (getDigitalActionRisingEdge(actionNextDataset, vr::k_ulInvalidInputValueHandle))
+	if (getDigitalActionRisingEdge(actionNextDataset))
 	{
 		int nextDataset = std::min(app->currentDatasetIdx + 1, app->numberOfDatasets() - 1);
 		app->loadDatasetCPUAsync(nextDataset);
 	}
 
 	// Load the previous dataset.
-	if (getDigitalActionRisingEdge(actionPreviousDataset, vr::k_ulInvalidInputValueHandle))
+	if (getDigitalActionRisingEdge(actionPreviousDataset))
 	{
 		app->loadDatasetCPUAsync(std::max(app->currentDatasetIdx - 1, 0));
 	}
 
 	// Recentre the headset.
-	if (getDigitalActionRisingEdge(actionRecentreHeadset, vr::k_ulInvalidInputValueHandle))
+	if (getDigitalActionRisingEdge(actionRecentreHeadset))
 	{
 		resetStartPose();
 	}
 
-	if (getDigitalActionRisingEdge(actionNextProxy, vr::k_ulInvalidInputValueHandle))
+	if (getDigitalActionRisingEdge(actionNextProxy))
 	{
 		int nextProxy = app->settings->switchGLRenderModel + 1;
 		app->settings->switchGLRenderModel = std::min(nextProxy, int(app->proxies.size() - 1));
 	}
 
-	if (getDigitalActionRisingEdge(actionPreviousProxy, vr::k_ulInvalidInputValueHandle))
+	if (getDigitalActionRisingEdge(actionPreviousProxy))
 	{
 		app->settings->switchGLRenderModel = std::max(app->settings->switchGLRenderModel - 1, 0);
 	}
@@ -1032,9 +1042,14 @@ void VRInterface::render(std::vector<GLProgram*>& _programs)
 		renderCompanionWindow();
 
 		vr::Texture_t leftEyeTexture = { (void*)(uintptr_t)leftEyeDesc.m_nResolveTextureId, vr::TextureType_OpenGL, vr::ColorSpace_Gamma };
-		vr::VRCompositor()->Submit(vr::Eye_Left, &leftEyeTexture);
+		const auto leftError = vr::VRCompositor()->Submit(vr::Eye_Left, &leftEyeTexture);
 		vr::Texture_t rightEyeTexture = { (void*)(uintptr_t)rightEyeDesc.m_nResolveTextureId, vr::TextureType_OpenGL, vr::ColorSpace_Gamma };
-		vr::VRCompositor()->Submit(vr::Eye_Right, &rightEyeTexture);
+		const auto rightError = vr::VRCompositor()->Submit(vr::Eye_Right, &rightEyeTexture);
+		if (leftError != vr::VRCompositorError_None || rightError != vr::VRCompositorError_None)
+		{
+			LOG_EVERY_N(WARNING, 120) << "SteamVR frame submission failed. Left: " << leftError
+			                          << ", right: " << rightError;
+		}
 	}
 
 	if (m_bVblank && m_bGlFinishHack)

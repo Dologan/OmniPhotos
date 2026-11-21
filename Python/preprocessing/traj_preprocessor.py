@@ -4,10 +4,10 @@ The module implement camera trajectory reconstruction
 """
 import subprocess
 import os
+import pathlib
 import copy
-import time
+import math
 
-import numpy as np
 
 from colmap import colmap2stepReconstruction
 from abs_preprocessor import AbsPreprocessor
@@ -49,14 +49,14 @@ class TrajPreprocessor(AbsPreprocessor):
             return
 
         # clean GUI canvas
-        self.show_image(np.full((2000, 9000, 3), 255, np.uint8))
 
         if self.trajectory_tool == "all" or self.trajectory_tool == "colmap":
             self.show_info("start COLMAP reconstruction")
             # initial COLMAP environment
             self.dir_make(self.output_directory_path_colmap)
             # call colmap reconstruction
-            self.trajectory_reconstruct_colmap(str(self.image_perspective_output_path))
+            input_dir = self.image_perspective_output_path if self.image_type == "panoramic" else self.traj_input_images_dir
+            self.trajectory_reconstruct_colmap(str(input_dir))
             self.show_info("Finish COLMAP reconstruction")
 
         if self.trajectory_tool == "all" or self.trajectory_tool == "openvslam":
@@ -130,14 +130,35 @@ class TrajPreprocessor(AbsPreprocessor):
 
         mapping_frame_interval = self.config["preprocessing.colmap.frame_interval"]
 
-        # reconstruct the camera pose with colmap
+        camera_params = ""
+        if self.image_type == "panoramic":
+            width = self.config["preprocessing.colmap.perspective_resolution_width"]
+            height = self.config["preprocessing.colmap.perspective_resolution_height"]
+            vfov = self.config["preprocessing.colmap.perspective_fov_vertical"]
+            focal = height / (2 * math.tan(math.radians(vfov) / 2))
+            camera_params = f"{focal},{width / 2},{height / 2}"
+
+        backend = self.config.get("preprocessing.colmap.backend", "legacy")
+        if backend == "pycolmap":
+            from colmap.modern import reconstruct
+
+            reconstruct(
+                pathlib.Path(input_image_folder), self.trajectory_images_list, colmap_database_dir,
+                camera_params, self.config.get("preprocessing.colmap.device", "auto"),
+                self.config.get("preprocessing.colmap.min_registration_fraction", 0.9),
+            )
+            return
+        if backend != "legacy":
+            raise ValueError(f"Unsupported COLMAP backend: {backend}")
+
         colmap2stepReconstruction.trajectory_reconstruct_colmap(
             colmap_bin=self.config["preprocessing.colmap.execution_file_path"],
             images_dir=input_image_folder,
             colmap_database_dir=str(colmap_database_dir),
             vocab_tree_path=self.config["preprocessing.colmap.vocab_file_path"],
-            show_result_step_1=True,
-            mapping_frame_interval=mapping_frame_interval)
+            show_result_step_1=False,
+            mapping_frame_interval=mapping_frame_interval,
+            camera_params=camera_params)
 
     def trajectory_reconstruct_openvslam(self,
                                          openvslam_execution_path,
@@ -193,7 +214,7 @@ class TrajPreprocessor(AbsPreprocessor):
         openvslam_mapping_params_list.append("--repeat-times")  # run type mapping
         openvslam_mapping_params_list.append(str(openvslam_mapping_repeat_times))
 
-        subprocess.run(openvslam_mapping_params_list, capture_output=True, check=True)
+        subprocess.run(openvslam_mapping_params_list, check=True)
 
         # 2) reconstruct camera location
         msg = "Begin OpenVSLAM location."
@@ -207,6 +228,3 @@ class TrajPreprocessor(AbsPreprocessor):
         openvslam_location_params_list.append(openvslam_output_trajectory_path)
 
         subprocess.run(openvslam_location_params_list, check=True)
-
-        # to wait the finish of openvslam output file writing
-        time.sleep(5)

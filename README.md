@@ -65,14 +65,18 @@ Once the preprocessing is finished, the dataset can be opened in the Viewer.
 For processing new datasets from scratch, please follow the detailed documentation at [Python/preprocessing/readme.md](./Python/preprocessing/readme.md).
 
 
+## Development and desktop processing
+
+See the [modern workflow](docs/modernization.md) for capture import, the desktop launcher, Linux and Windows builds, and Quest 3 PC VR. The [research review](docs/modernization-research.md) describes candidate reconstruction improvements and how to compare their output.
+
 ## Compiling from source
 
-The OmniPhotos `Preprocessing` and `Viewer` applications are written in C++11, with some Python used for preparing datasets.
+The OmniPhotos `Preprocessing` and `Viewer` applications are written in C++17, with some Python used for preparing datasets.
 
 Both main applications and the included libraries use [CMake](https://cmake.org/) as build system generator.
 We recommend CMake 3.16 or newer, but older 3.x versions might also work.
 
-Our code has been developed and tested with Microsoft Visual Studio 2015 and 2019 (both 64 bit).
+Current CI definitions cover Linux and 64-bit Windows. Use a compiler with C++17 support.
 
 
 ### Required dependencies
@@ -85,17 +89,17 @@ Our code has been developed and tested with Microsoft Visual Studio 2015 and 201
    * OpenCV 4.1.1 needs to be compiled from source with the `optflow` contrib package (for DIS flow).
    * We also support the CUDA Brox flow from the `cudaoptflow` module, if it is compiled in. In this case, tick `USE_CUDA_IN_OPENCV` in CMake.
 4. [OpenGL 4.1](https://www.opengl.org/): provided by the operating system
-5. [glog](https://github.com/google/glog) (newer than 0.4.0 master works)
-6. [gflags](https://github.com/gflags/gflags) (version 2.2.2 works)
+5. [glog](https://github.com/google/glog) 0.6 or newer (0.7.1 verified)
+6. [gflags](https://github.com/gflags/gflags) if your glog build uses it
 
 
 ### Included dependencies (in `/src/3rdParty/`)
 
-1. [DearImGui 1.79](https://github.com/ocornut/imgui): included automatically as a git submodule.
+1. [Dear ImGui 1.92.9b](https://github.com/ocornut/imgui), initialized with `git submodule update --init src/3rdParty/imgui`.
 2. [GL3W](https://github.com/skaslev/gl3w)
 3. [JsonCpp 1.8.0](https://github.com/open-source-parsers/jsoncpp): [almalgamated version](https://github.com/open-source-parsers/jsoncpp/wiki/Amalgamated-(Possibly-outdated))
 4. [nlohmann/json 3.6.1](https://github.com/nlohmann/json)
-5. [OpenVR 1.10.30](https://github.com/ValveSoftware/openvr): enable with `WITH_OPENVR` in CMake.
+5. [OpenVR](https://github.com/ValveSoftware/openvr) is optional. The legacy Windows SDK is bundled. Set `WITH_OPENVR=ON` and `OPENVR_ROOT_DIR` to use an external SDK.
 6. [TCLAP](http://tclap.sourceforge.net/)
 7. [tinyfiledialogs 3.3.8](https://sourceforge.net/projects/tinyfiledialogs/)
 
@@ -103,7 +107,7 @@ Our code has been developed and tested with Microsoft Visual Studio 2015 and 201
 ### Optional dependencies
 
 1. [Ceres](http://ceres-solver.org/) (with SuiteSparse) is required for the scene-adaptive proxy geometry fitting. Enable with `USE_CERES` in CMake.
-2. [googletest (master)](https://github.com/google/googletest): automatically added when `WITH_TEST` is enabled in CMake.
+2. [GoogleTest](https://github.com/google/googletest) 1.14 or newer when `WITH_TEST=ON`. CMake fetches the pinned 1.17.0 release if needed.
 
 
 ## Citation

@@ -210,60 +210,48 @@ void PreprocessingApp::computeOpticalFlow()
 	if (_method == FlowMethod::DIS)
 		preset = 2;
 
-	OpticalFlowApp* opticalFlow = new OpticalFlowApp(_method, preset, appSettings.downsampleFlow > 0);
-
+	OpticalFlowApp opticalFlow(_method, preset, appSettings.downsampleFlow > 0);
 	if (_method == FlowMethod::BroxCUDA)
-		opticalFlow->init(_method, 0, &appSettings.broxFlowParams);
+		opticalFlow.init(_method, 0, &appSettings.broxFlowParams);
 
-	opticalFlow->outputDirectory = appDataset->pathToCacheFolder;
-	opticalFlow->readyToComputeFlowFields = false;
-	opticalFlow->flowFieldsComputed = false;
-	opticalFlow->shouldShutdown = false;
-	opticalFlow->writeFlowIntoFile = true;
-	opticalFlow->equirectWraparound = appSettings.useEquirectCamera;
+	opticalFlow.outputDirectory = appDataset->pathToCacheFolder;
+	opticalFlow.readyToComputeFlowFields = false;
+	opticalFlow.flowFieldsComputed = false;
+	opticalFlow.shouldShutdown = false;
+	opticalFlow.writeFlowIntoFile = true;
+	opticalFlow.equirectWraparound = appSettings.useEquirectCamera;
+	opticalFlow.downsampleFlow = (appSettings.downsampleFlow == 1);
 
-	if (appSettings.downsampleFlow == 1)
-		opticalFlow->downsampleFlow = true;
-	else
-		opticalFlow->downsampleFlow = false;
-
-	int size = appActiveDataset->getCameraSetup()->getNumberOfCameras();
-
-	Timer t1;
-	try
+	ScopedTimer timer;
+	const auto& cameras = *appActiveDataset->getCameraSetup()->getCameras();
+	const auto size = cameras.size();
+	if (size < 2)
+		RUNTIME_EXCEPTION("Optical flow needs at least two selected cameras.");
+	for (size_t i = 0; i < size; i++)
 	{
-		ScopedTimer timer;
-		std::vector<Camera*>& cameras = *appActiveDataset->getCameraSetup()->getCameras();
-
-		for (int i = 0; i < size; i++)
-		{
-			LOG(INFO) << "Computing optical flow (" << (i + 1) << " of " << size << ")";
-			opticalFlow->setPair(*cameras[i], *cameras[(i + 1) % size]);
-			opticalFlow->run();
-			opticalFlow->flowFieldsComputed = false;
-		}
-
-		LOG(INFO) << "Computed " << (2 * size) << " flow fields in "
-		          << std::fixed << std::setprecision(2) << timer.getElapsedSeconds() << "s";
-
-		appActiveDataset->forwardFlows = opticalFlow->getForwardFlows();
-		appActiveDataset->backwardFlows = opticalFlow->getBackwardFlows();
-
-		// The backward flows are from the next to the current frame, but need
-		// them to be the backward flows from the current to the previous frames.
-		// To fix that, we need to shift them along by one in a ring buffer fashion.
-		std::vector<string> tmpBWFlows;
-		tmpBWFlows.push_back(appActiveDataset->backwardFlows[size - 1]);
-		for (int k = 0; k < size - 1; k++)
-			tmpBWFlows.push_back(appActiveDataset->backwardFlows[k]);
-		appActiveDataset->backwardFlows = tmpBWFlows;
-
-		opticalFlow->shouldShutdown = true;
+		LOG(INFO) << "Computing optical flow (" << (i + 1) << " of " << size << ")";
+		opticalFlow.setPair(*cameras[i], *cameras[(i + 1) % size]);
+		opticalFlow.run();
+		opticalFlow.flowFieldsComputed = false;
 	}
-	catch (const std::exception& e)
+
+	auto forward = opticalFlow.getForwardFlows();
+	auto backward = opticalFlow.getBackwardFlows();
+	if (forward.size() != size || backward.size() != size)
+		RUNTIME_EXCEPTION("Optical flow did not produce two fields per selected camera.");
+	for (size_t i = 0; i < size; i++)
 	{
-		LOG(WARNING) << "Optical flow crashed: " << e.what();
+		if (!fs::is_regular_file(forward[i]) || fs::file_size(forward[i]) == 0
+		    || !fs::is_regular_file(backward[i]) || fs::file_size(backward[i]) == 0)
+			RUNTIME_EXCEPTION("Optical flow could not write all output fields.");
 	}
+
+	// Each previous flow produced above starts from the next camera. Rotate it to match its source.
+	std::rotate(backward.begin(), backward.end() - 1, backward.end());
+	appActiveDataset->forwardFlows = std::move(forward);
+	appActiveDataset->backwardFlows = std::move(backward);
+	LOG(INFO) << "Computed " << (2 * size) << " flow fields in "
+	          << std::fixed << std::setprecision(2) << timer.getElapsedSeconds() << "s";
 }
 
 

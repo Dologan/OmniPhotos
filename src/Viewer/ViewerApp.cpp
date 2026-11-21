@@ -38,6 +38,10 @@ ViewerApp::ViewerApp(const std::string& _datasetPath, bool _enableVR) :
 
 ViewerApp::~ViewerApp()
 {
+	if (datasetLoad.valid())
+		datasetLoad.wait();
+	textureLoaderBack.reset();
+	datasetBack.reset();
 	// We don't use GUI in VR, so only clean it up if not in VR.
 #ifdef WITH_OPENVR
 	if (enableVR)
@@ -217,6 +221,7 @@ int ViewerApp::init()
 
 	// Load data to GPU memory and render.
 	loadDatasetGPU();
+	currentDatasetIdx = defaultDatasetIndex;
 
 	if (gui)
 		gui->datasetLoading = false;
@@ -316,7 +321,7 @@ int ViewerApp::initPrograms()
 	proxies_str.push_back("Sphere");
 	proxies.push_back(std::pair<int, GLRenderModel*>(_proxy_id++, getVisualization()->sphere_model));
 
-	for (Mesh* mesh : loaded_meshes)
+	for (const auto& mesh : loaded_meshes)
 	{
 		proxies_str.push_back(mesh->name);
 		mesh->createRenderModel(mesh->name);
@@ -393,45 +398,17 @@ void ViewerApp::updateCamPhiDirTexture()
 
 void ViewerApp::loadDatasetCPU(const int dataset_idx)
 {
-	// 0-0) Skip if current dataset.
-	if (dataset_idx == currentDatasetIdx)
-	{
-		LOG(WARNING) << "Selected dataset is currently loaded. Skipping the dataset loading.";
-		return;
-	}
-
-	// 0-1) Skip if dataset is loading.
-	if (datasetBackStatus == DatasetStatus::Loading)
-	{
-		LOG(WARNING) << "Another dataset is loading! Please be patient.";
-		return;
-	}
-	else if (datasetBackStatus == DatasetStatus::Loaded)
-	{
-		LOG(WARNING) << "Another dataset is uploading to GPU! Please be patient.";
-		return;
-	}
-	datasetBackStatus = DatasetStatus::Loading;
-
-	if (gui)
-		gui->datasetLoading = true;
-
-	LOG(INFO) << "Loading dataset '" << datasetInfoList[dataset_idx].name << "'";
-	currentDatasetIdx = dataset_idx;
-
-	if (datasetBack == nullptr)
-	{
-		VLOG(1) << "Creating initial 'datasetBack'";
-		datasetBack = new CameraSetupDataset();
-	}
+	LOG(INFO) << "Loading dataset '" << datasetInfoList.at(dataset_idx).name << "'";
+	datasetBack = std::make_unique<CameraSetupDataset>();
+	datasetBackSetting = CameraSetupSettings{};
 
 	// 0-2) Load new dataset and settings from disk.
 	CameraSetupDataset& dataset = datasetInfoList[dataset_idx];
 	datasetBackSetting.configFile = dataset.pathToConfigYAML;
 	LOG(INFO) << "Loading the dataset from:\n"
 	          << datasetBackSetting.configFile;
-	datasetBack->loadFromCache(&datasetBackSetting);
-	settings = &datasetBackSetting;
+	if (!datasetBack->loadFromCache(&datasetBackSetting))
+		throw std::runtime_error("Could not load dataset cache");
 
 	// 1) Load all .obj files we can find in the cache dir as potential proxy geometry.
 	for (const auto& entry : fs::directory_iterator(datasetBack->pathToCacheFolder))
@@ -443,53 +420,45 @@ void ViewerApp::loadDatasetCPU(const int dataset_idx)
 			if (endsWith(filepath.string(), "points.obj"))
 				continue;
 
-			Mesh* m = Mesh::load(filepath.generic_string());
-			loaded_meshes_back.push_back(m);
+			std::unique_ptr<Mesh> mesh(Mesh::load(filepath.generic_string()));
+			if (mesh)
+				loaded_meshes_back.push_back(std::move(mesh));
 		}
 	}
 
 	// 2) Load images, flows and depth maps.
-	ImageLoader* imgLoader = new ImageLoader(datasetBack->getCameraSetup()->getCameras(), true);
-	if (imageTextureFormat.empty())
-	{
-		LOG(WARNING) << "The RGB image texture format not set. Use the default option GL_RGB." << imageTextureFormat;
-		imageTextureFormat = "GL_RGB";
-	}
-	imgLoader->imageTextureFormat = imageTextureFormat;
+	auto imgLoader = std::make_unique<ImageLoader>(datasetBack->getCameraSetup()->getCameras(), true);
+	imgLoader->imageTextureFormat = imageTextureFormat.empty() ? "GL_RGB" : imageTextureFormat;
 
-	FlowLoader* flowLoader = nullptr;
+	std::unique_ptr<FlowLoader> flowLoader;
 	if (datasetBackSetting.useOpticalFlow)
 	{
-		flowLoader = new FlowLoader((datasetBackSetting.downsampleFlow > 0), imgLoader->getImageDims(),
+		flowLoader = std::make_unique<FlowLoader>((datasetBackSetting.downsampleFlow > 0), imgLoader->getImageDims(),
 		                            &datasetBack->forwardFlows, &datasetBack->backwardFlows);
 		if (!flowLoader->checkAvailability())
 		{
-			delete flowLoader;
-			flowLoader = nullptr;
+			flowLoader.reset();
 			datasetBackSetting.useOpticalFlow = false;
 			LOG(WARNING) << "Optical flow files are not complete. Flow-based blending will not work.";
 		}
 	}
 
-	textureLoaderBack = new TextureLoader(imgLoader, flowLoader);
+	textureLoaderBack = std::make_unique<TextureLoader>(imgLoader.get(), flowLoader.get());
+	imgLoader.release();
+	flowLoader.release();
 	textureLoaderBack->loadTextures();
-
-	// 3) Load 3D point cloud
-	//don't want to delete, I want to update
-	//	delete datasetBack->camVis;
-	//visualizationBack = new CameraSetupVisualization(datasetBack, &datasetBackSetting);
-	if (datasetBackSetting.load3DPoints)
-		datasetBack->setWorldPointCloud(datasetBack->getWorldPointCloud());
-
-	// 4) Inform the main thread the back-buffer dataset is ready.
-	datasetBackStatus = DatasetStatus::Loaded;
 }
 
 
 void ViewerApp::loadDatasetCPUAsync(const int dataset_idx)
 {
-	std::thread load([this, dataset_idx]() { loadDatasetCPU(dataset_idx); });
-	load.detach();
+	if (datasetLoad.valid() || dataset_idx == currentDatasetIdx)
+		return;
+
+	datasetLoad = std::async(std::launch::async, [this, dataset_idx]() { loadDatasetCPU(dataset_idx); });
+	pendingDatasetIdx = dataset_idx;
+	if (gui)
+		gui->datasetLoading = true;
 }
 
 
@@ -507,14 +476,11 @@ void ViewerApp::loadDatasetGPU()
 
 	// 1) Switch over to the new dataset.
 	appSettings = std::move(datasetBackSetting);
-	appDataset = new CameraSetupDataset(datasetBack);
+	appDataset = datasetBack.release();
 
-	textureLoader = textureLoaderBack;
+	textureLoader = textureLoaderBack.release();
 
 	loaded_meshes = std::move(loaded_meshes_back);
-
-	datasetBack = nullptr;
-	textureLoaderBack = nullptr;
 
 	// 2) Set up new GL runtime data + upload the proxy data to GPU.
 	textureLoader->initTextures();
@@ -532,8 +498,6 @@ void ViewerApp::loadDatasetGPU()
 	///////////////////////////////////////////////////
 	initGLCamera();
 	initPrograms();
-
-	datasetBackStatus = DatasetStatus::Empty;
 }
 
 
@@ -590,13 +554,26 @@ void ViewerApp::run()
 	shouldShutdown |= (glfwWindowShouldClose(getGLwindow()->getGLFWwindow()) > 0);
 	lastRunTime = glfwGetTime();
 
-	// if back dataset ready, exchange the dataset in runtime & GPU
-	if (datasetBackStatus == DatasetStatus::Loaded)
+	if (datasetLoad.valid() && datasetLoad.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
 	{
+		if (gui)
+			gui->datasetLoading = false;
+		try
+		{
+			datasetLoad.get();
+		}
+		catch (const std::exception& error)
+		{
+			LOG(ERROR) << "Could not switch dataset: " << error.what();
+			textureLoaderBack.reset();
+			datasetBack.reset();
+			loaded_meshes_back.clear();
+			return;
+		}
 		unloadDatasetGPU();
 		loadDatasetGPU();
+		currentDatasetIdx = pendingDatasetIdx;
 		setupRecordingSession();
-		if (gui) gui->datasetLoading = false;
 	}
 }
 

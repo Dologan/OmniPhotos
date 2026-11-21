@@ -55,22 +55,10 @@ def reduce_ini(output_path):
 # ---- COLMAP functions ------------------------------------------------------------------------------------------------
 
 def check_version(colmap_bin):
-    """
-    check the version of COLMAP. The corresponding relationship between commit_id and official version is:
-    - 3.6-dev.3 <----> 0dce1db
-
-    the script just test on COLMAP 3.6-dev.3
-    """
-    output_str = subprocess.getoutput(colmap_bin + " --help")
-    commit_number = re.findall(r'(Commit [a-z0-9]*)', output_str)[0][7:]
-    version_list = ["0dce1db"]
-    if not commit_number in version_list:
-        msg = "!!!!!!!!!!warning!!!!!!!!!!! \n"
-        msg = msg + "The COLMAP is build with commit number : {}".format(commit_number) + "\n"
-        msg = msg + "now just support {}".format(version_list) + "\n"
-        msg = msg + "please download latest version of COLMAP from https://github.com/colmap/colmap/releases"
-        print(msg)
-        #raise Exception(msg)
+    """Check that the configured COLMAP executable can start."""
+    output = subprocess.run([colmap_bin, "help"], check=True, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    print(output.stdout.splitlines()[0] if output.stdout else "COLMAP is available.")
 
 def show_model(colmap_bin, import_path, database_path, image_path):
     """

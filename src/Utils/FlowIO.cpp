@@ -1,6 +1,16 @@
 #include "FlowIO.hpp"
 #include "IOTools.hpp"
 
+#include <memory>
+
+namespace
+{
+struct CloseFile
+{
+	void operator()(FILE* file) const { fclose(file); }
+};
+}
+
 
 // Reads a .flo file (Middlebury format) into an OpenCV matrix.
 cv::Mat2f readFloFile(const char* filename)
@@ -11,8 +21,8 @@ cv::Mat2f readFloFile(const char* filename)
 		return cv::Mat2f();
 	}
 
-	FILE* stream = fopen(filename, "rb");
-	if (stream == 0)
+	std::unique_ptr<FILE, CloseFile> stream(fopen(filename, "rb"));
+	if (!stream)
 	{
 		LOG(WARNING) << "Error in readFloFile: could not open " << filename << ".";
 		return cv::Mat2f();
@@ -21,9 +31,9 @@ cv::Mat2f readFloFile(const char* filename)
 	int width, height;
 	float tag;
 
-	if ((int)fread(&tag, sizeof(float), 1, stream) != 1
-	    || (int)fread(&width, sizeof(int), 1, stream) != 1
-	    || (int)fread(&height, sizeof(int), 1, stream) != 1)
+	if ((int)fread(&tag, sizeof(float), 1, stream.get()) != 1
+	    || (int)fread(&width, sizeof(int), 1, stream.get()) != 1
+	    || (int)fread(&height, sizeof(int), 1, stream.get()) != 1)
 	{
 		LOG(WARNING) << "Error in readFloFile: problem reading file " << filename << ".";
 		return cv::Mat2f();
@@ -38,35 +48,30 @@ cv::Mat2f readFloFile(const char* filename)
 	// another sanity check to see that integers were read correctly (99999 should do the trick...)
 	if (width < 1 || width > 99999)
 	{
-		char msg[64];
-		sprintf("Error in readFloFile(%s): illegal width %d.\n", filename, width);
-		LOG(WARNING) << msg;
+		LOG(WARNING) << "Error in readFloFile(" << filename << "): illegal width " << width << ".";
 		return cv::Mat2f();
 	}
 
 	if (height < 1 || height > 99999)
 	{
-		char msg[64];
-		sprintf("Error in readFloFile(%s): illegal height %d.\n", filename, height);
-		LOG(WARNING) << msg;
+		LOG(WARNING) << "Error in readFloFile(" << filename << "): illegal height " << height << ".";
 		return cv::Mat2f();
 	}
 
 	cv::Mat2f img(height, width);
 
-	if ((int)fread(img.data, 2 * sizeof(float), (size_t)(width * height), stream) != width * height)
+	if ((int)fread(img.data, 2 * sizeof(float), (size_t)(width * height), stream.get()) != width * height)
 	{
 		LOG(WARNING) << "Error in readFloFile(" << filename << "): file is too short.";
 		return cv::Mat2f();
 	}
 
-	if (fgetc(stream) != EOF)
+	if (fgetc(stream.get()) != EOF)
 	{
 		LOG(WARNING) << "Error in readFloFile(" << filename << "): file is too long.";
 		return cv::Mat2f();
 	}
 
-	fclose(stream);
 	return img;
 }
 
@@ -291,8 +296,8 @@ cv::Mat2f readBarronFile(const char* filename)
 		return cv::Mat2f();
 	}
 
-	FILE* stream = fopen(filename, "rb");
-	if (stream == 0)
+	std::unique_ptr<FILE, CloseFile> stream(fopen(filename, "rb"));
+	if (!stream)
 	{
 		LOG(WARNING) << "Error in readBarronFile: could not open " << filename << ".";
 		return cv::Mat2f();
@@ -302,12 +307,12 @@ cv::Mat2f readBarronFile(const char* filename)
 	float width, height;                // size without crop
 	float crop_offset_x, crop_offset_y; // crop offset
 
-	if (fread(&crop_width, sizeof(float), 1, stream) != 1u
-	    || fread(&crop_height, sizeof(float), 1, stream) != 1u
-	    || fread(&width, sizeof(float), 1, stream) != 1u
-	    || fread(&height, sizeof(float), 1, stream) != 1u
-	    || fread(&crop_offset_x, sizeof(float), 1, stream) != 1u
-	    || fread(&crop_offset_y, sizeof(float), 1, stream) != 1u)
+	if (fread(&crop_width, sizeof(float), 1, stream.get()) != 1u
+	    || fread(&crop_height, sizeof(float), 1, stream.get()) != 1u
+	    || fread(&width, sizeof(float), 1, stream.get()) != 1u
+	    || fread(&height, sizeof(float), 1, stream.get()) != 1u
+	    || fread(&crop_offset_x, sizeof(float), 1, stream.get()) != 1u
+	    || fread(&crop_offset_y, sizeof(float), 1, stream.get()) != 1u)
 	{
 		LOG(WARNING) << "Error in readBarronFile: problem reading header of file " << filename << ".";
 		return cv::Mat2f();
@@ -316,35 +321,30 @@ cv::Mat2f readBarronFile(const char* filename)
 	// sanity check to see that integers were read correctly (99999 should do the trick...)
 	if (width < 1 || width > 99999)
 	{
-		char msg[128];
-		sprintf("Error in readBarronFile(%s): illegal width %f.\n", filename, width);
-		LOG(WARNING) << msg;
+		LOG(WARNING) << "Error in readBarronFile(" << filename << "): illegal width " << width << ".";
 		return cv::Mat2f();
 	}
 
 	if (height < 1 || height > 99999)
 	{
-		char msg[128];
-		sprintf("Error in readBarronFile(%s): illegal height %f.\n", filename, height);
-		LOG(WARNING) << msg;
+		LOG(WARNING) << "Error in readBarronFile(" << filename << "): illegal height " << height << ".";
 		return cv::Mat2f();
 	}
 
 	cv::Mat2f img((int)height, (int)width);
 
-	if ((int)fread(img.data, 2 * sizeof(float), (size_t)(width * height), stream) != (int)(width * height))
+	if ((int)fread(img.data, 2 * sizeof(float), (size_t)(width * height), stream.get()) != (int)(width * height))
 	{
 		LOG(WARNING) << "Error in readBarronFile(" << filename << "): file is too short.";
 		return cv::Mat2f();
 	}
 
-	if (fgetc(stream) != EOF)
+	if (fgetc(stream.get()) != EOF)
 	{
 		LOG(WARNING) << "Error in readBarronFile(" << filename << "): file is too long.";
 		return cv::Mat2f();
 	}
 
-	fclose(stream);
 	return img;
 }
 

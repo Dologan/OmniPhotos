@@ -241,6 +241,8 @@ inline fs::path getBinaryPath()
 	}
 	std::string s = &buffer[0];
 	return s;
+#elif defined(__linux__)
+	return fs::canonical("/proc/self/exe");
 #else
 	#error Cannot find the executable on this platform
 #endif

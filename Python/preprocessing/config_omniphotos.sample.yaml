@@ -13,7 +13,7 @@
 # Note that all paths are relative to the directory this config file is in.
 
 # The first preprocessing step to be executed.
-preprocessing.step_start: 2
+preprocessing.step_start: 1
 
 # The last preprocessing step to be executed. Use -1 to execute all steps.
 preprocessing.step_end: 3
@@ -23,7 +23,7 @@ preprocessing.input_type: video
 
 # If "input_type" is "video", this is the path to the video file.
 # If "input_type" is "image", this is the path to the "Input" directory.
-preprocessing.input_path: VID_20190614_125313_00_059-flowstate.mp4
+preprocessing.input_path: stitched.mp4
 
 # Naming scheme for extracted images to be stored in the Input directory for OmniPhotos.
 preprocessing.original_filename_expression: image-%04d.jpg
@@ -38,15 +38,14 @@ preprocessing.frame_index_start: 0
 # The last frame to be used for reconstruction (inclusive). The very last frame of the video is -1.
 preprocessing.frame_index_end: -1
 
-# Using the automatic circle selector to find the optimal circle in the camera path.
-# This will override frame_index_start and frame_index_end and extract all video frames.
-preprocessing.find_stable_circle: True
+# OpenVSLAM can select a loop automatically. The PyCOLMAP profile expects a capture trimmed to one loop.
+preprocessing.find_stable_circle: False
 
 # Maximum number of frames in the final output. Extract all frames with -1.
 preprocessing.frame_fixed_number: 200
 
 # Camera pose reconstruction tools: "openvslam", "colmap" or "all".
-preprocessing.trajectory_tool: openvslam
+preprocessing.trajectory_tool: colmap
 
 
 #### OpenVSLAM ####################################################################################
@@ -67,7 +66,12 @@ preprocessing.openvslam.dbow2_file_path: ../openvslam/openvslam-win32-x64-bin-dd
 # Default input directory : where the rotated images are stored
 # Default output directory: /Capture/COLMAP
 
-# Path to COLMAP executable.
+# Install requirements-colmap.txt for PyCOLMAP. The legacy backend uses the executable and vocabulary below.
+preprocessing.colmap.backend: pycolmap
+preprocessing.colmap.device: auto
+preprocessing.colmap.min_registration_fraction: 0.9
+
+# Path to the legacy COLMAP executable.
 preprocessing.colmap.execution_file_path: D:/utilities/COLMAP/COLMAP-3.6-dev.3-windows/COLMAP.bat
 
 # Camera type: "panoramic" extracts a perspective view; "perspective" uses images as is.
@@ -94,7 +98,7 @@ preprocessing.colmap.vocab_file_path: D:/utilities/COLMAP/COLMAP_vocabulary_tree
 
 #### OmniPhotos binary preprocessing ##############################################################
 
-# Path to OmniPhotos preprocessing executable.
+# Path to the native Preprocessing executable. New Project in the launcher sets this.
 preprocessing.omniphotos.execution_file_path: ../omniphotos/Preprocessing.exe
 
 # Override the name of the OmniPhotos preprocessing configuration file.

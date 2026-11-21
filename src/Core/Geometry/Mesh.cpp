@@ -244,7 +244,7 @@ Mesh* Mesh::load(const string& filename)
 	if (!ret)
 	{
 		LOG(WARNING) << "Failed to load '" << filename << "'.";
-		return false;
+		return nullptr;
 	}
 
 	if (shapes.size() > 1)

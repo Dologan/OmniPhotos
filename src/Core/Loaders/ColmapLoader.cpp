@@ -11,6 +11,7 @@
 #include "Utils/Utils.hpp"
 
 #include <fstream>
+#include <sstream>
 
 using namespace std;
 
@@ -38,16 +39,25 @@ void ColmapLoader::readPathsToColmapModelFiles(const string& sfmFile)
 	try
 	{
 		getline(reader, pathToCameras);
+		pathToCameras = rtrim(pathToCameras, "\r");
 		if (!pathToCameras.empty())
 			pathToCameras = fs::canonical(configDirectory / pathToCameras).generic_string();
 
 		getline(reader, pathToImages);
+		pathToImages = rtrim(pathToImages, "\r");
 		if (!pathToImages.empty())
 			pathToImages = fs::canonical(configDirectory / pathToImages).generic_string();
 
 		getline(reader, pathTo3DPoints);
+		pathTo3DPoints = rtrim(pathTo3DPoints, "\r");
 		if (!pathTo3DPoints.empty())
-			pathTo3DPoints = fs::canonical(configDirectory / pathTo3DPoints).generic_string();
+		{
+			auto pointPath = configDirectory / pathTo3DPoints;
+			// Older Windows datasets may capitalize COLMAP's standard filename differently.
+			if (pointPath.filename() == "Points3D.txt" && !fs::exists(pointPath))
+				pointPath.replace_filename("points3D.txt");
+			pathTo3DPoints = fs::canonical(pointPath).generic_string();
+		}
 	}
 	catch (const exception& e)
 	{
@@ -233,50 +243,32 @@ vector<ColmapImage> ColmapLoader::readColmapImages()
 	if (!ifsImages.is_open())
 		RUNTIME_EXCEPTION(string("File '") + pathToImages + "' could not be opened.");
 
-	ColmapImage* image = NULL;
+	// A COLMAP image record has a pose line followed by a possibly empty point line.
+	if (frameInterval < 1)
+		RUNTIME_EXCEPTION("COLMAP frame interval must be positive.");
 
-	// Read and parse the file line by line.
-	int lineCount = 0;
-	int entryNumber = -1;
-
+	bool poseLine = true;
+	int entryNumber = 0;
 	string line;
 	while (getline(ifsImages, line))
 	{
-		// Skip comments.
-		if (line[0] == '#')
+		if (!line.empty() && line.front() == '#')
 			continue;
-
-		// I just care about poses, not feature points
-		if (lineCount % 2 == 0)
+		if (poseLine && (entryNumber++ % frameInterval) == 0)
 		{
-			entryNumber++;
-			if ((entryNumber % frameInterval) == 0)
+			istringstream pose(line);
+			ColmapImage image{};
+			if (!(pose >> image.imageID >> image.qw >> image.qx >> image.qy >> image.qz
+			           >> image.tx >> image.ty >> image.tz >> image.camID)
+			    || !getline(pose >> ws, image.name))
 			{
-				// Parse camera line.
-				vector<string> tokens = split(line, ' ');
-				image = new ColmapImage();
-				image->imageID = stoi(tokens[0]);
-				image->qw = stof(tokens[1]);
-				image->qx = stof(tokens[2]);
-				image->qy = stof(tokens[3]);
-				image->qz = stof(tokens[4]);
-				image->tx = stof(tokens[5]);
-				image->ty = stof(tokens[6]);
-				image->tz = stof(tokens[7]);
-				image->camID = stoi(tokens[8]);
-				image->name = tokens[9];
+				RUNTIME_EXCEPTION("Invalid COLMAP image pose in " + pathToImages);
 			}
+			image.name = rtrim(image.name, "\r");
+			images.push_back(std::move(image));
 		}
-
-		if (image)
-		{
-			images.push_back(*image);
-			image = NULL;
-		}
-
-		lineCount++;
+		poseLine = !poseLine;
 	}
-	ifsImages.close();
 
 	return images;
 }
@@ -353,27 +345,15 @@ vector<Colmap3DPoint> ColmapLoader::readColmap3DPoints(bool loadSparsePointCloud
 // extracting frame number from filename and sets filename itself
 void ColmapLoader::setCamNames(Camera* cam, string name, int len)
 {
-	cam->imageName = name;
-	size_t pos = name.find("/");
+	std::replace(name.begin(), name.end(), '\\', '/');
+	const auto filename = fs::path(name).filename();
+	const auto extension = lower(filename.extension().string());
+	if (extension != ".jpg" && extension != ".jpeg" && extension != ".png")
+		RUNTIME_EXCEPTION("COLMAP image must be a JPEG or PNG: " + name);
 
-	// Stripping folder from image name
-	// I wonder why it's actually there...
-	if (pos != string::npos)
-		cam->imageName = name.substr(pos + 1, name.length() - pos - 1);
-
-	if (contains(name, ".jpg"))
-	{
-		pos = name.find(".jpg");
-	}
-	else if (contains(name, ".png"))
-	{
-		pos = name.find(".png");
-	}
-	else
-	{
-		RUNTIME_EXCEPTION("Only jpg and png as input image");
-	}
-
-	name = name.substr(pos - len, len);
-	cam->frame = stoi(name);
+	const auto stem = filename.stem().string();
+	if (len < 1 || stem.size() < static_cast<size_t>(len))
+		RUNTIME_EXCEPTION("COLMAP image name does not contain a frame number: " + name);
+	cam->imageName = filename.string();
+	cam->frame = stoi(stem.substr(stem.size() - len));
 }

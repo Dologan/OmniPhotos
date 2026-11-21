@@ -33,3 +33,13 @@ target_link_libraries(${MODULE_NAME}
 )
 
 #install (TARGETS ${MODULE_NAME} DESTINATION bin)
+
+if(WITH_OPENVR AND WIN32)
+  find_file(OMNIPHOTOS_OPENVR_DLL NAMES openvr_api.dll
+    HINTS "${OPENVR_ROOT_DIR}/bin/${OPENVR_PLATFORM}" NO_DEFAULT_PATH)
+  if(OMNIPHOTOS_OPENVR_DLL)
+    add_custom_command(TARGET Viewer POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${OMNIPHOTOS_OPENVR_DLL}" "$<TARGET_FILE_DIR:Viewer>")
+  endif()
+endif()

@@ -10,7 +10,8 @@ def trajectory_reconstruct_colmap(colmap_bin,
                                     colmap_database_dir,
                                     vocab_tree_path,
                                     show_result_step_1=True,
-                                    mapping_frame_interval=10):
+                                    mapping_frame_interval=10,
+                                    camera_params=""):
     """
     Utility for COLMAP reconstruction, Recommend COLMAP version 3.6-dev.3
 
@@ -57,7 +58,7 @@ def trajectory_reconstruct_colmap(colmap_bin,
                              params={
                                  'ImageReader.single_camera': 'true',
                                  'ImageReader.camera_model': 'SIMPLE_PINHOLE',
-                                 'ImageReader.camera_params': '346.41016151, 600, 600',
+                                 'ImageReader.camera_params': camera_params,
                                  'SiftExtraction.estimate_affine_shape': 'true',
                                  # 'SiftExtraction.domain_size_pooling': 'true'
                              })
@@ -77,20 +78,14 @@ def trajectory_reconstruct_colmap(colmap_bin,
                 input_path="",
                 image_list_path="")
 
-    # show result
+    # The registration step below consumes the first reconstructed model.
+    if not (pathlib.Path(sparse_model_dir) / "0" / "images.bin").is_file():
+        raise RuntimeError("COLMAP did not reconstruct a sparse model.")
     if show_result_step_1:
-        result_model_list = os.listdir(sparse_model_dir)
-        #check and output the reconstruction information
-        if 0 == len(result_model_list):
-            msg = "warning: colmap reconstruction is fail!!"
-            print(msg)
-            #raise Exception(msg)
-            return
-        for result_model in result_model_list:
-            colmap.show_model(colmap_bin,
-                        import_path=str(pathlib.Path(sparse_model_dir) / result_model),
-                        database_path=sparse_colmap_database,
-                        image_path=sparse_images_dir)
+        colmap.show_model(colmap_bin,
+                          import_path=str(pathlib.Path(sparse_model_dir) / "0"),
+                          database_path=sparse_colmap_database,
+                          image_path=sparse_images_dir)
 
     # Step 2. Register all images to the model -------------------------------------------------------------------------
     full_colmap_database = os.path.join(colmap_database_dir, 'full-reconstruction.db')
@@ -101,7 +96,7 @@ def trajectory_reconstruct_colmap(colmap_bin,
                              params={
                                  'ImageReader.single_camera': 'true',
                                  'ImageReader.camera_model': 'SIMPLE_PINHOLE',
-                                 'ImageReader.camera_params': '346.41016151, 600, 600',
+                                 'ImageReader.camera_params': camera_params,
                                  'SiftExtraction.estimate_affine_shape': 'true',
                                  # 'SiftExtraction.domain_size_pooling': 'true'
                              })

@@ -134,8 +134,9 @@ string createFilenameRelativeToFolder(string filename, string folder)
 
 bool pathStartsWith(string path, string prefix)
 {
-	// Replaces separators in the string with OS-specific separators.
-	return startsWith(fs::path(path).string(), fs::path(prefix).string());
+	std::replace(path.begin(), path.end(), '\\', '/');
+	std::replace(prefix.begin(), prefix.end(), '\\', '/');
+	return startsWith(path, prefix);
 }
 
 

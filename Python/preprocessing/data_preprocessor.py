@@ -3,16 +3,14 @@
 implement data preparing by rotation, extraction images & video.\
     To generate the data for trajectory reconstruction
 """
-import os
+import shutil
+import tempfile
 import pathlib
-import multiprocessing
-import concurrent.futures
 
 import numpy as np
-from scipy.spatial.transform import Rotation as R
-import PIL
+from PIL import Image
+from scipy.spatial.transform import Rotation
 import ffmpeg
-import imageio
 
 from envmap import EnvironmentMap
 
@@ -30,9 +28,6 @@ class DataPreprocessor(AbsPreprocessor):
         :param args: a directory containing config info
         """
         super().__init__(args)
-        self.input_data = None
-        self.image_list = []
-
         self.persp_forward = self.config["preprocessing.colmap.perspective_forward"]
         self.persp_fov_v = self.config["preprocessing.colmap.perspective_fov_vertical"]
         self.persp_resolution_height = \
@@ -40,31 +35,6 @@ class DataPreprocessor(AbsPreprocessor):
         self.persp_resolution_width = \
             self.config["preprocessing.colmap.perspective_resolution_width"]
         self.rotation = self.config["preprocessing.image_rotation"]
-        self.frame_fixed_number = self.config["preprocessing.frame_fixed_number"]
-
-        self.dir_make(self.traj_input_images_dir)
-        if self.image_type == "panoramic" and (self.trajectory_tool == "all" or self.trajectory_tool == "colmap"):
-            self.dir_make(self.image_perspective_output_path)
-
-        # set the thread number for image processing, include rotation, etc.
-        self.rotation_num_threads = 1
-
-    def save_image_seq(self):
-        """
-        save the numpy data to image
-        """
-        for i in range(0, np.shape(self.input_data)[0]):  # multi-thread
-            image = PIL.Image.fromarray(self.input_data[i])
-            file_name = self.original_filename_expression % i
-            # generate output image file path
-            output_image_path = self.traj_input_images_dir / file_name
-            if output_image_path.suffix in [".jpeg", ".jpg"]:
-                image.save(str(output_image_path), quality=95)
-            else:
-                image.save(str(output_image_path))
-            if i % self.show_infor_interval == 0:
-                self.show_info("Image idx is {}, output to {}.".format(i, output_image_path))
-                self.show_image(self.input_data[i])
 
     def save_images(self, output_path_list, data):
         """
@@ -82,7 +52,7 @@ class DataPreprocessor(AbsPreprocessor):
             self.show_info("The path type should be pathlib.", "error")
 
         for i in range(0, np.shape(data)[0]):  # multi-thread
-            image = PIL.Image.fromarray(data[i])
+            image = Image.fromarray(data[i])
             if output_path_list[i].suffix in [".jpeg", ".jpg"]:
                 image.save(str(output_path_list[i]), quality=95)
             else:
@@ -115,8 +85,9 @@ class DataPreprocessor(AbsPreprocessor):
         if [0.0, 0.0] == self.rotation:
             return data
 
-        rotation_matrix = np.zeros([3, 3])
-        self.spherical2dcm(self.rotation, rotation_matrix)
+        rotation_matrix = Rotation.from_euler(
+            "xyz", [self.rotation[1], self.rotation[0], 0], degrees=True
+        ).as_matrix()
         for i in range(0, np.shape(data)[0]):
             if i % self.show_infor_interval == 0:
                 self.show_info("Rotating image with 'rotate_image' function, index is {}.".format(i))
@@ -140,8 +111,9 @@ class DataPreprocessor(AbsPreprocessor):
         # self.show_info("generate perspective images with rotation, {}".format(persp_forward))
 
         # get forward rotation matrix
-        rotation_matrix = np.zeros([3, 3])
-        self.spherical2dcm(self.persp_forward, rotation_matrix)
+        rotation_matrix = Rotation.from_euler(
+            "xyz", [self.persp_forward[1], self.persp_forward[0], 0], degrees=True
+        ).as_matrix()
 
         prespect_frame_data = \
             np.ones((np.shape(frame_data)[0], self.persp_resolution_height, \
@@ -161,146 +133,85 @@ class DataPreprocessor(AbsPreprocessor):
         return prespect_frame_data
 
     def preprocess_data(self):
-        """
-        preprocess data from video or images
-        """
-        if not self.input_path.exists():
-            msg = "preprocessing.input_path does not exist: {}.".format(str(self.input_path))
-            self.show_info(msg, "error")
+        """Prepare the selected frames with their original frame indices."""
+        project_colmap = self.image_type == "panoramic" and self.trajectory_tool in {"colmap", "all"}
+        if self.image_type == "panoramic" and self.frame_width != 2 * self.frame_height:
+            raise ValueError("Panoramic input must be a 2:1 equirectangular image or video.")
 
-        self.show_info(("Preprocessing {}, the input data is :{}."\
-            .format(self.input_type, str(self.input_path))))
+        if any(pathlib.Path(name).suffix.lower() not in {".jpg", ".jpeg", ".png"}
+               for name in self.trajectory_images_list):
+            raise ValueError("Use a .jpg, .jpeg, or .png frame filename pattern.")
+        if len(set(self.trajectory_images_list)) != len(self.desired_frame_indices):
+            raise ValueError("Frame filename pattern must generate unique names.")
 
-        # load data
-        if self.input_type == 'video':
-            self.preprocess_video(str(self.input_path))  # input_data_temp is readonly
-        elif self.input_type == 'image':
-            self.preprocess_image(str(self.input_path))
+        targets = [(self.traj_input_images_dir, "frames")]
+        if project_colmap:
+            targets.append((self.image_perspective_output_path, "perspective"))
+        for target, _ in targets:
+            if target.exists() and any(target.iterdir()):
+                raise FileExistsError(
+                    f"{target} already contains data. Start step 1 in a new project or resume at step 2."
+                )
+
+        self.show_info(f"Preparing {len(self.desired_frame_indices)} frames from {self.input_path}.")
+        with tempfile.TemporaryDirectory(prefix="frames-", dir=self.temp_dir) as directory:
+            staging = pathlib.Path(directory)
+            for _, folder in targets:
+                (staging / folder).mkdir()
+            if self.input_type == "video":
+                sources = self.extract_video_frames(staging)
+            else:
+                sources = [self.input_path / self.original_image_list[index]
+                           for index in self.desired_frame_indices]
+
+            for index, (source, filename) in enumerate(zip(sources, self.trajectory_images_list)):
+                destination = staging / "frames" / filename
+                with Image.open(source) as image:
+                    if image.size != (self.frame_width, self.frame_height):
+                        raise ValueError(f"Input frame dimensions changed at {source}.")
+                    frame = np.array(image.convert("RGB"))[np.newaxis]
+                if self.image_type == "panoramic":
+                    self.rotate_image_fast(frame)
+                if self.input_type == "video" and self.rotation == [0.0, 0.0] and source.suffix == destination.suffix:
+                    shutil.move(source, destination)
+                else:
+                    self.save_images([destination], frame)
+                if project_colmap:
+                    perspective = self.extract_perspective_image(frame.astype(np.float64))
+                    self.save_images([staging / "perspective" / filename], perspective)
+                if index % self.show_infor_interval == 0:
+                    self.show_info(f"Prepared {filename}.")
+                    self.show_image(frame[0])
+
+            for target, folder in targets:
+                # rename preserves the fully prepared stage, including when a prior empty directory exists.
+                if target.exists():
+                    target.rmdir()
+                (staging / folder).rename(target)
+
+    def extract_video_frames(self, staging):
+        """Decode the video once and write only the selected frames."""
+        indices = self.desired_frame_indices
+        first, last = indices[0], indices[-1]
+        span = last - first
+        if len(indices) == span + 1:
+            select = f"between(n,{first},{last})"
         else:
-            msg = 'Input_type error: {}.'.format(self.input_type)
-            self.show_info(msg, "error")
-
-    def preprocess_image(self, images_path):
-        """
-        load image and save the images by rotation, getting pin-hole e.t.c
-        :param images_path: the input images path
-        :return :
-        """
-        self.show_info("Starting the pre-processing of the image data.")
-        if self.image_type != "panoramic":
-            self.show_info("The input images are not panoramic images, {}. Skipping."\
-                .format(self.__class__.__name__))
-            return
-
-        # get the images from Input folder
-        input_image_list = []
-        self.get_image_file_list(images_path, input_image_list)
-
-        # do with multi-thread
-        #with concurrent.futures.ThreadPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.rotation_num_threads) as executor:
-            def process_images(image_path, image_info):
-                image_idx = image_info[1]
-                image_path = pathlib.Path(image_info[0]) / image_path
-                self.show_info("Processing image {}.".format(image_path))
-
-                # 1) load image from disk
-                if not image_path.exists():
-                    self.show_info("The images do not exist {}.".format(str(image_path)))
-                frame_data = np.asarray(imageio.imread(str(image_path)))
-
-                # check image resolution 
-                if frame_data.shape[1] != frame_data.shape[0] * 2:
-                    self.show_info("The column number is not twice the row number,\
-                         crop the image {}.".format(image_path), "warning")
-                    if frame_data.shape[1] > frame_data.shape[0] * 2:
-                        frame_data = frame_data[:, 0:frame_data.shape[0]*2, :]
-                    else:
-                        frame_data = frame_data[0:int(frame_data.shape[1]/2), :, :]
-
-                # 2) rotate image and save
-                self.rotate_image_fast(frame_data[np.newaxis, :])
-                self.save_images([self.traj_input_images_dir / image_path.name], frame_data[np.newaxis, :])
-
-                # 3) extract & save perspective image data for colmap panoramic images
-                if self.image_type == "panoramic" and (self.trajectory_tool == "all" or self.trajectory_tool == "colmap"):
-                    frame_data_persp = \
-                        self.extract_perspective_image(frame_data[np.newaxis, :].astype(np.double))
-                    file_name = self.original_filename_expression % image_idx
-                    self.save_images([self.image_perspective_output_path / file_name], frame_data_persp)
-
-                # 4) show result
-                if image_idx >= 0 and image_idx % self.show_infor_interval == 0:
-                    self.show_info("Precessing image: {}.".format(image_path))
-                    self.show_image(frame_data)
-
-            return_results = {executor.submit(
-                process_images, input_image_list[image_idx], [images_path, image_idx])\
-                    :image_idx for image_idx in range(0, len(input_image_list))}
-            for future in concurrent.futures.as_completed(return_results):
-                if not future.done():
-                    self.show_info("Image processing error in function preprocess_image.", "error")
-
-
-    def preprocess_video(self, video_path):
-        """
-        extract image from video, with rotation, getting pin-hole e.t.c, and save images.
-        :param video_path: the video file path
-        :return :
-        """
-        if self.traj_input_images_dir.exists() and len(os.listdir(str(self.traj_input_images_dir))) != 0 :
-            self.show_info("The trajectory input folder {} already exists and is not empty. Image extraction skipped."\
-                .format(str(self.traj_input_images_dir)))
-            return
-
-        # extract all the frames
-        filename = os.path.splitext(self.original_filename_expression)[0]+".jpg"
-        output_path = os.path.join(self.traj_input_images_dir, filename)
-        ffmpeg.input(video_path).output(output_path,start_number=0,**{'qscale:v': 2}).run(capture_stdout=True)
-
-        # generate the list of desired frame indices
-        if self.frame_fixed_number <= 0:
-            vframes_size = 1  # NOTE : should be 1
-            frame_idx_list = list(range(self.image_start_idx, self.image_end_idx + 1, vframes_size))
-        else:
-            frame_idx_list = \
-                np.linspace(start=0,
-                    stop=self.frame_number, num=self.frame_fixed_number)
-            frame_idx_list = list(frame_idx_list.astype(int))
-
-        # remove the unwanted images
-        filename_list = [output_path % frame for frame in frame_idx_list]  # files to keep
-        filename_list = [os.path.basename(f) for f in filename_list]  # filenames to keep
-        for image_name in os.listdir(self.traj_input_images_dir):
-            if image_name not in filename_list:
-                os.remove(os.path.join(self.traj_input_images_dir, image_name))
-
-        # rotate the images
-        self.preprocess_image(self.traj_input_images_dir)
-
-    def preprocess_images(self, directory_path):
-        """
-        load images to the memory
-        :param directory_path: the path of image directory
-        :return : a numpy array, shape is [frame_number, height, width, 3]
-        """
-        directory_path = pathlib.Path(directory_path)
-        # load image to memory
-        frame_data = PIL.Image.open(directory_path / self.image_list[0])
-        self.input_data = np.zeros((len(self.image_list),) + np.shape(frame_data), np.uint8)
-        for idx in range(0, len(self.image_list)):
-            frame_data = PIL.Image.open(directory_path / self.image_list[idx])
-            self.input_data[idx, :, :, :] = frame_data
-            if idx % self.show_infor_interval == 0:
-                self.show_info("Load {}th image: {}.".format(idx, self.image_list[idx]))
-                self.show_image(np.array(frame_data))
-
-    def spherical2dcm(self, spherical_coordinate, dcm):
-        """
-        convert spherical coordinate to DCM (Direction Cosine Matrix)
-        :param spherical_coordinate: the spherical coordinate Euler angles [phi, theta]
-        :param dcm: the rotation matrix (Direction Cosine Matrix), is 3x3 matrix
-        :return:
-        """
-        dcm[:] = R.from_euler("xyz", [spherical_coordinate[1], \
-                                      spherical_coordinate[0], 0], degrees=True).as_matrix()
+            # An index is selected when an evenly spaced sample rounds down to it.
+            intervals = len(indices) - 1
+            position = f"(n-{first})"
+            select = (
+                f"between(n,{first},{last})*"
+                f"lt(ceil({position}*{intervals}/{span}),ceil(({position}+1)*{intervals}/{span}))"
+            )
+        suffix = pathlib.Path(self.trajectory_images_list[0]).suffix.lower()
+        pattern = staging / f"decoded-%010d{suffix}"
+        options = {"start_number": 0, "fps_mode": "passthrough"}
+        if suffix in {".jpg", ".jpeg"}:
+            options["qscale:v"] = 2
+        (ffmpeg.input(str(self.input_path))["v:0"].filter("select", select)
+         .output(str(pattern), **options).global_args("-hide_banner", "-loglevel", "error").run())
+        sources = sorted(staging.glob(f"decoded-*{suffix}"))
+        if len(sources) != len(indices):
+            raise RuntimeError(f"FFmpeg extracted {len(sources)} frames, expected {len(indices)}.")
+        return sources

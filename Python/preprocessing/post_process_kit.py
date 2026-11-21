@@ -209,22 +209,21 @@ def generate_gt_proxy_geometry(input_obj_file, output_obj_file, \
     output_obj_handle.close()
 
 
-# note msgpack with 0.5.6 version
 def openvslam_msg_2_obj(input_msg_file_path, output_obj_file_path):
     """
     """
     json_file_path = output_obj_file_path + ".json"
     obj_file_path = output_obj_file_path
-    data = open(input_msg_file_path, 'rb')
-    data_text = msgpack.Unpacker(data, raw=False).unpack()
+    with open(input_msg_file_path, 'rb') as data:
+        data_text = msgpack.Unpacker(data, raw=False, strict_map_key=False).unpack()
 
     # 1) convert the msg to json
-    self.show_info("Output OpenVSLAM msg file to json : {}".format(json_file_path))
+    print(f"Output OpenVSLAM msg file to JSON: {json_file_path}")
     with open(json_file_path, 'w') as json_file:
         json_file.write(json.dumps(data_text))
 
     # 2) generate the obj file for point cloud
-    self.show_info("Output OpenVSLAM point cloud to: {}".format(obj_file_path))
+    print(f"Output OpenVSLAM point cloud to: {obj_file_path}")
     landmarks = data_text["landmarks"]
     with open(obj_file_path, 'w') as obj_file:
         for key in landmarks:
@@ -243,8 +242,8 @@ def openvslam__msg_to_obj(msg_file_path):
     """
     json_file_path = msg_file_path + ".json"
     obj_file_path = msg_file_path + ".obj"
-    data = open(msg_file_path, 'rb')
-    data_text = msgpack.Unpacker(data, raw=False).unpack()
+    with open(msg_file_path, 'rb') as data:
+        data_text = msgpack.Unpacker(data, raw=False, strict_map_key=False).unpack()
 
     # 1) convert the msg to json
     with open(json_file_path, 'w') as json_file:
